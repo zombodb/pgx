@@ -2,7 +2,7 @@
 // governed by the MIT license that can be found in the LICENSE file.
 
 //! Provides a safe wrapper around Postgres' `pg_sys::TupleDescData` struct
-use crate::{pg_sys, void_mut_ptr, FromDatum, PgBox, PgRelation};
+use crate::{pg_sys, void_mut_ptr, FromDatum, PgPtr, PgRelation};
 
 use std::ops::Deref;
 
@@ -38,9 +38,9 @@ use std::ops::Deref;
 ///
 /// PGX's safe wrapper takes care of properly freeing or decrementing reference counts
 pub struct PgTupleDesc<'a> {
-    tupdesc: PgBox<pg_sys::TupleDescData>,
+    tupdesc: PgPtr<pg_sys::TupleDescData>,
     parent: Option<&'a PgRelation>,
-    data: Option<PgBox<pg_sys::HeapTupleData>>,
+    data: Option<PgPtr<pg_sys::HeapTupleData>>,
     need_release: bool,
     need_pfree: bool,
 }
@@ -116,7 +116,7 @@ impl<'a> PgTupleDesc<'a> {
     /// wrap the `pg_sys::TupleDesc` contained by the specified `PgRelation`
     pub fn from_relation(parent: &PgRelation) -> PgTupleDesc {
         PgTupleDesc {
-            tupdesc: PgBox::from_pg(parent.rd_att),
+            tupdesc: parent.rd_att,
             parent: Some(parent),
             data: None,
             need_release: false,
@@ -132,8 +132,7 @@ impl<'a> PgTupleDesc<'a> {
     /// This function is unsafe as it cannot guarantee that the provided `pg_sys::Datum` actually
     /// points to a composite type
     pub unsafe fn from_composite(composite: pg_sys::Datum) -> Self {
-        let htup_header =
-            pg_sys::pg_detoast_datum(composite as *mut pg_sys::varlena) as pg_sys::HeapTupleHeader;
+        let htup_header = pg_sys::pg_detoast_datum(PgPtr::from(composite)).cast();
         let tup_type = crate::heap_tuple_header_get_type_id(htup_header);
         let tup_typmod = crate::heap_tuple_header_get_typmod(htup_header);
         let tupdesc = pg_sys::lookup_rowtype_tupdesc(tup_type, tup_typmod);
@@ -221,7 +220,7 @@ impl<'a> Deref for PgTupleDesc<'a> {
 impl<'a> Drop for PgTupleDesc<'a> {
     fn drop(&mut self) {
         if self.need_release {
-            unsafe { release_tupdesc(self.tupdesc.as_ptr()) }
+            unsafe { release_tupdesc(self.tupdesc) }
         } else if self.need_pfree {
             unsafe { pg_sys::pfree(self.tupdesc.as_ptr() as void_mut_ptr) }
         }

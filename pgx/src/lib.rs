@@ -38,7 +38,6 @@ pub mod hooks;
 pub mod htup;
 pub mod inoutfuncs;
 pub mod itemptr;
-pub mod list;
 #[macro_use]
 pub mod log;
 pub mod atomics;
@@ -48,7 +47,6 @@ pub mod memcxt;
 pub mod misc;
 pub mod namespace;
 pub mod nodes;
-pub mod pgbox;
 pub mod rel;
 pub mod shmem;
 pub mod spi;
@@ -69,13 +67,11 @@ pub use hooks::*;
 pub use htup::*;
 pub use inoutfuncs::*;
 pub use itemptr::*;
-pub use list::*;
 pub use log::*;
 pub use lwlock::*;
 pub use memcxt::*;
 pub use namespace::*;
 pub use nodes::*;
-pub use pgbox::*;
 pub use rel::*;
 pub use shmem::*;
 pub use spi::*;
@@ -87,8 +83,12 @@ pub use wrappers::*;
 pub use xid::*;
 
 pub use pgx_pg_sys as pg_sys; // the module only, not its contents
+
+// reexport these so they look like they come from here
+pub use pg_sys::{Get, IntoPgPtr, New, New0, PgPtr};
 pub use pgx_pg_sys::submodules::*;
-pub use pgx_pg_sys::PgBuiltInOids; // reexport this so it looks like it comes from here
+pub use pgx_pg_sys::AsPgCStr;
+pub use pgx_pg_sys::PgBuiltInOids;
 
 /// A macro for marking a library compatible with the Postgres extension framework.
 ///

@@ -173,7 +173,7 @@ pub enum PgBuiltInOids {
 }
 impl PgBuiltInOids {
     pub fn from(oid: crate::Oid) -> Option<PgBuiltInOids> {
-        match oid {
+        match oid as i32 {
             crate::BOOLOID => Some(crate::PgBuiltInOids::BOOLOID),
             crate::BYTEAOID => Some(crate::PgBuiltInOids::BYTEAOID),
             crate::CHAROID => Some(crate::PgBuiltInOids::CHAROID),

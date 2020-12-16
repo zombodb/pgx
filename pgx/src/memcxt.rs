@@ -9,7 +9,7 @@
 //! An enum-based interface (`PgMemoryContexts`) around Postgres' various `MemoryContext`s provides
 //! simple accessibility to working with MemoryContexts in a compiler-checked manner
 //!
-use crate::pg_sys::AsPgCStr;
+use crate::pg_sys::{AsPgCStr, PgPtr};
 use crate::{guard, pg_sys, PgBox};
 use std::fmt::Debug;
 
@@ -259,7 +259,7 @@ impl PgMemoryContexts {
         R,
         F: Fn(&mut PgMemoryContexts) -> R + std::panic::UnwindSafe + std::panic::RefUnwindSafe,
     >(
-        &mut self,
+        self,
         f: F,
     ) -> R {
         match self {
@@ -270,11 +270,10 @@ impl PgMemoryContexts {
                 initial_block_size,
                 max_block_size,
             } => {
-                let context: pg_sys::MemoryContext = unsafe {
-                    let name = std::ffi::CString::new(*name).unwrap();
+                let context = unsafe {
                     pg_sys::AllocSetContextCreateExtended(
-                        *parent,
-                        name.into_raw(),
+                        parent,
+                        name.as_pg_cstr(),
                         *min_context_size as usize,
                         *initial_block_size as usize,
                         *max_block_size as usize,
@@ -301,71 +300,38 @@ impl PgMemoryContexts {
     /// use pgx::PgMemoryContexts;
     /// let copy = PgMemoryContexts::CurrentMemoryContext.pstrdup("make a copy of this");
     /// ```
-    pub fn pstrdup(&self, s: &str) -> *mut std::os::raw::c_char {
-        let cstring = std::ffi::CString::new(s).unwrap();
-        unsafe { pg_sys::MemoryContextStrdup(self.value(), cstring.as_ptr()) }
+    pub fn pstrdup(&self, s: &str) -> PgPtr<std::os::raw::c_char> {
+        unsafe { pg_sys::MemoryContextStrdup(self.value(), s.as_pg_cstr()) }
     }
 
     /// Copies `len` bytes, starting at `src` into this memory context and
     /// returns a raw `*mut T` pointer to the newly allocated location
-    pub fn copy_ptr_into<T>(&mut self, src: *mut T, len: usize) -> *mut T {
+    pub fn copy_ptr_into<T>(&mut self, src: PgPtr<T>, len: usize) -> PgPtr<T> {
         if src.is_null() {
             panic!("attempt to copy a null pointer");
         }
         unsafe {
             let dest = pg_sys::MemoryContextAlloc(self.value(), len);
-            pg_sys::memcpy(dest, src as void_mut_ptr, len as u64);
-            dest as *mut T
+            pg_sys::memcpy(dest, src.cast(), len as u64);
+            dest
         }
     }
 
-    /// Allocate memory in this context, which will be free'd whenever Postgres deletes this MemoryContext
-    pub fn palloc(&mut self, len: usize) -> *mut std::os::raw::c_void {
-        unsafe { pg_sys::MemoryContextAlloc(self.value(), len) }
-    }
-
-    pub fn palloc_struct<T>(&mut self) -> *mut T {
-        self.palloc(std::mem::size_of::<T>()) as *mut T
-    }
-
-    pub fn palloc0_struct<T>(&mut self) -> *mut T {
-        self.palloc0(std::mem::size_of::<T>()) as *mut T
-    }
-
-    /// Allocate a slice in this context, which will be free'd whenever Postgres deletes this MemoryContext
-    pub fn palloc_slice<'a, T>(&mut self, len: usize) -> &'a mut [T] {
-        let buffer = self.palloc(std::mem::size_of::<T>() * len) as *mut T;
-        unsafe { std::slice::from_raw_parts_mut(buffer, len) }
-    }
-
-    /// Allocate a slice in this context, where the memory is zero'd, which will be free'd whenever Postgres deletes this MemoryContext
-    pub fn palloc0_slice<'a, T>(&mut self, len: usize) -> &'a mut [T] {
-        let buffer = self.palloc0(std::mem::size_of::<T>() * len) as *mut T;
-        unsafe { std::slice::from_raw_parts_mut(buffer, len) }
-    }
-
-    /// Allocate memory in this context, which will be free'd whenever Postgres deletes this MemoryContext
-    ///
-    /// The allocated memory is zero'd
-    pub fn palloc0(&mut self, len: usize) -> *mut std::os::raw::c_void {
-        unsafe { pg_sys::MemoryContextAllocZero(self.value(), len) }
-    }
-
-    pub fn leak_and_drop_on_delete<T>(&mut self, v: T) -> *mut T {
-        unsafe extern "C" fn drop_on_delete<T>(ptr: void_mut_ptr) {
+    pub fn leak_and_drop_on_delete<T>(&mut self, v: T) -> PgPtr<T> {
+        unsafe extern "C" fn drop_on_delete<T>(ptr: PgPtr<std::os::raw::c_void>) {
             let boxed = Box::from_raw(ptr as *mut T);
             drop(boxed);
         }
 
         let leaked_ptr = Box::leak(Box::new(v));
-        let mut memcxt_callback =
-            PgBox::from_pg(self.palloc_struct::<pg_sys::MemoryContextCallback>());
+        let mut memcxt_callback = PgPtr::<pg_sys::MemoryContextCallback>::new();
+
         memcxt_callback.func = Some(drop_on_delete::<T>);
-        memcxt_callback.arg = leaked_ptr as *mut T as void_mut_ptr;
+        memcxt_callback.arg = PgPtr::from_raw(leaked_ptr).cast();
         unsafe {
             pg_sys::MemoryContextRegisterResetCallback(self.value(), memcxt_callback.into_pg());
         }
-        leaked_ptr
+        memcxt_callback.arg
     }
 
     /// helper function
@@ -410,50 +376,5 @@ impl PgMemoryContexts {
             pub fn pgx_GetMemoryContextChunk(pointer: void_ptr) -> pg_sys::MemoryContext;
         }
         unsafe { pgx_GetMemoryContextChunk(ptr) }
-
-        //
-        // the below causes PG to crash b/c it mis-calculates where the MemoryContext address is
-        //
-        // I have likely either screwed up max_align()/type_align() or the pointer math at the
-        // bottom of the function
-        //
-
-        //        // #define MAXALIGN(LEN)                  TYPEALIGN(MAXIMUM_ALIGNOF, (LEN))
-        //        #[inline]
-        //        fn max_align(len: void_ptr) -> void_ptr {
-        //            // #define TYPEALIGN(ALIGNVAL,LEN)  \
-        //            //      (((uintptr_t) (LEN) + ((ALIGNVAL) - 1)) & ~((uintptr_t) ((ALIGNVAL) - 1)))
-        //            #[inline]
-        //            fn type_align(
-        //                alignval: u32,
-        //                len: void_ptr,
-        //            ) -> void_ptr {
-        //                (((len as usize) + ((alignval) - 1) as usize) & !(((alignval) - 1) as usize))
-        //                    as void_ptr
-        //            }
-        //            type_align(pg_sys::MAXIMUM_ALIGNOF, len)
-        //        }
-        //
-        //        let context;
-        //
-        //        /*
-        //         * Try to detect bogus pointers handed to us, poorly though we can.
-        //         * Presumably, a pointer that isn't MAXALIGNED isn't pointing at an
-        //         * allocated chunk.
-        //         */
-        //        assert!(!ptr.is_null());
-        //        assert_eq!(
-        //            ptr as void_ptr,
-        //            max_align(ptr) as void_ptr
-        //        );
-        //
-        //        /*
-        //         * OK, it's probably safe to look at the context.
-        //         */
-        //        //            context = *(MemoryContext *) (((char *) pointer) - sizeof(void *));
-        //        context = (((ptr as *const std::os::raw::c_char) as usize)
-        //            - std::mem::size_of::<void_ptr>())
-        //            as pg_sys::MemoryContext;
-        //        context
     }
 }

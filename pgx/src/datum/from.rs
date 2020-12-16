@@ -3,7 +3,7 @@
 
 //! for converting a pg_sys::Datum and a corresponding "is_null" bool into a typed Option
 
-use crate::{pg_sys, text_to_rust_str_unchecked, varlena_to_byte_slice, PgBox, PgMemoryContexts};
+use crate::{pg_sys, text_to_rust_str_unchecked, varlena_to_byte_slice, PgMemoryContexts, PgPtr};
 use std::ffi::CStr;
 
 /// Convert a `(pg_sys::Datum, is_null:bool, type_oid:pg_sys::Oid)` tuple into a Rust type
@@ -175,7 +175,7 @@ impl<'a> FromDatum for &'a str {
         } else if datum == 0 {
             panic!("a varlena Datum was flagged as non-null but the datum is zero");
         } else {
-            let varlena = pg_sys::pg_detoast_datum_packed(datum as *mut pg_sys::varlena);
+            let varlena = pg_sys::pg_detoast_datum_packed(PgPtr::from(datum));
             Some(text_to_rust_str_unchecked(varlena))
         }
     }
@@ -196,7 +196,7 @@ impl<'a> FromDatum for &'a str {
         } else {
             memory_context.switch_to(|_| {
                 // this gets the varlena Datum copied into this memory context
-                let detoasted = pg_sys::pg_detoast_datum_copy(datum as *mut pg_sys::varlena);
+                let detoasted = pg_sys::pg_detoast_datum_copy(PgPtr::from(datum));
 
                 // and we need to unpack it (if necessary), which will decompress it too
                 let varlena = pg_sys::pg_detoast_datum_packed(detoasted);
@@ -262,7 +262,7 @@ impl<'a> FromDatum for &'a [u8] {
         } else if datum == 0 {
             panic!("a bytea Datum was flagged as non-null but the datum is zero");
         } else {
-            let varlena = pg_sys::pg_detoast_datum_packed(datum as *mut pg_sys::varlena);
+            let varlena = pg_sys::pg_detoast_datum_packed(PgPtr::from(datum));
             Some(varlena_to_byte_slice(varlena))
         }
     }
@@ -283,7 +283,7 @@ impl<'a> FromDatum for &'a [u8] {
         } else {
             memory_context.switch_to(|_| {
                 // this gets the varlena Datum copied into this memory context
-                let detoasted = pg_sys::pg_detoast_datum_copy(datum as *mut pg_sys::varlena);
+                let detoasted = pg_sys::pg_detoast_datum_copy(PgPtr::from(datum));
 
                 // and we need to unpack it (if necessary), which will decompress it too
                 let varlena = pg_sys::pg_detoast_datum_packed(detoasted);
@@ -325,9 +325,9 @@ impl FromDatum for () {
 }
 
 /// for user types
-impl<T> FromDatum for PgBox<T> {
+impl<T> FromDatum for PgPtr<T> {
     #[inline]
-    unsafe fn from_datum(datum: pg_sys::Datum, is_null: bool, _: pg_sys::Oid) -> Option<PgBox<T>> {
+    unsafe fn from_datum(datum: pg_sys::Datum, is_null: bool, _: pg_sys::Oid) -> Option<PgPtr<T>> {
         if is_null {
             None
         } else if datum == 0 {
@@ -336,7 +336,7 @@ impl<T> FromDatum for PgBox<T> {
                 std::any::type_name::<T>()
             );
         } else {
-            Some(PgBox::<T>::from_pg(datum as *mut T))
+            Some(PgPtr::from(datum))
         }
     }
 
@@ -358,8 +358,7 @@ impl<T> FromDatum for PgBox<T> {
                     std::any::type_name::<T>()
                 );
             } else {
-                let copied = context.copy_ptr_into(datum as *mut T, std::mem::size_of::<T>());
-                Some(PgBox::<T>::from_pg(copied))
+                Some(context.copy_ptr_into(PgPtr::<T>::from(datum), std::mem::size_of::<T>()))
             }
         })
     }

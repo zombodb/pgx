@@ -2,7 +2,7 @@
 use crate::pg_sys::{VARATT_SHORT_MAX, VARHDRSZ_SHORT};
 use crate::{
     pg_sys, rust_regtypein, set_varsize, set_varsize_short, vardata_any, varsize_any,
-    varsize_any_exhdr, void_mut_ptr, FromDatum, IntoDatum, PgMemoryContexts, PostgresType,
+    varsize_any_exhdr, void_mut_ptr, FromDatum, IntoDatum, PgMemoryContexts, PgPtr, PostgresType,
     StringInfo,
 };
 use pgx_pg_sys::varlena;
@@ -12,15 +12,14 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
 struct PallocdVarlena {
-    ptr: *mut pg_sys::varlena,
+    ptr: PgPtr<pg_sys::varlena>,
     len: usize,
 }
 
 impl Clone for PallocdVarlena {
     fn clone(&self) -> Self {
         let len = self.len;
-        let ptr = PgMemoryContexts::Of(self.ptr as void_mut_ptr)
-            .copy_ptr_into(self.ptr as void_mut_ptr, len) as *mut pg_sys::varlena;
+        let ptr = PgMemoryContexts::Of(self.ptr as void_mut_ptr).copy_ptr_into(self.ptr, len);
 
         PallocdVarlena { ptr, len }
     }
@@ -113,7 +112,7 @@ where
     pub fn new() -> Self {
         let size_of = std::mem::size_of::<T>();
 
-        let ptr = unsafe { pg_sys::palloc0(pg_sys::VARHDRSZ + size_of) as *mut pg_sys::varlena };
+        let ptr = PgPtr::with_extra_len0(pg_sys::VARHDRSZ + size_of);
 
         // safe: ptr will halready be allocated
         unsafe {
@@ -150,7 +149,7 @@ where
     /// This function is considered unsafe as it cannot guarantee the provided `pg_sys::Datum` is a
     /// valid `*mut pg_sys::varlena`.
     pub unsafe fn from_datum(datum: pg_sys::Datum) -> Self {
-        let ptr = pg_sys::pg_detoast_datum(datum as *mut pg_sys::varlena);
+        let ptr = pg_sys::pg_detoast_datum(PgPtr::from(datum));
         let len = varsize_any(ptr);
 
         if ptr == datum as *mut pg_sys::varlena {
@@ -177,7 +176,7 @@ where
     ///
     /// This method is also used by the `IntoDatum for PgVarlena<T> where T: Copy + Sized`
     /// implementation.
-    pub fn into_pg(mut self) -> *mut pg_sys::varlena {
+    pub fn into_pg(mut self) -> PgPtr<pg_sys::varlena> {
         // we don't want our varlena to be pfree'd
         self.need_free = false;
         self.varlena.ptr
@@ -193,7 +192,7 @@ where
         if self.need_free {
             unsafe {
                 // safe: self.varlena.ptr will never be null
-                pg_sys::pfree(self.varlena.ptr as void_mut_ptr);
+                self.varlena.ptr.free();
             }
         }
 
@@ -297,7 +296,7 @@ where
         } else {
             memory_context.switch_to(|_| {
                 // this gets the varlena Datum copied into this memory context
-                let detoasted = pg_sys::pg_detoast_datum_copy(datum as *mut pg_sys::varlena);
+                let detoasted = pg_sys::pg_detoast_datum_copy(PgPtr::from(datum));
 
                 // and we need to unpack it (if necessary), which will decompress it too
                 let varlena = pg_sys::pg_detoast_datum_packed(detoasted);
@@ -326,24 +325,24 @@ impl<'de, T> FromDatum for T
 where
     T: PostgresType + Deserialize<'de>,
 {
-    unsafe fn from_datum(datum: usize, is_null: bool, _typoid: u32) -> Option<Self> {
+    unsafe fn from_datum(datum: pg_sys::Datum, is_null: bool, _typoid: u32) -> Option<Self> {
         if is_null {
             None
         } else {
-            cbor_decode(datum as *mut pg_sys::varlena)
+            cbor_decode(PgPtr::from(datum))
         }
     }
 
     unsafe fn from_datum_in_memory_context(
         memory_context: PgMemoryContexts,
-        datum: usize,
+        datum: pg_sys::Datum,
         is_null: bool,
         _typoid: u32,
     ) -> Option<Self> {
         if is_null {
             None
         } else {
-            cbor_decode_into_context(memory_context, datum as *mut pg_sys::varlena)
+            cbor_decode_into_context(memory_context, PgPtr::from(datum))
         }
     }
 }
@@ -360,17 +359,17 @@ where
     let size = serialized.len() as usize;
     let varlena = serialized.into_char_ptr();
     unsafe {
-        set_varsize(varlena as *mut pg_sys::varlena, size as i32);
+        set_varsize(PgPtr::from_raw(varlena).cast(), size as i32);
     }
 
     varlena as *const pg_sys::varlena
 }
 
-pub unsafe fn cbor_decode<'de, T>(input: *mut pg_sys::varlena) -> T
+pub unsafe fn cbor_decode<'de, T>(input: PgPtr<pg_sys::varlena>) -> T
 where
     T: Deserialize<'de>,
 {
-    let varlena = pg_sys::pg_detoast_datum_packed(input as *mut pg_sys::varlena);
+    let varlena = pg_sys::pg_detoast_datum_packed(input);
     let len = varsize_any_exhdr(varlena);
     let data = vardata_any(varlena);
     let slice = std::slice::from_raw_parts(data as *const u8, len);
@@ -379,14 +378,14 @@ where
 
 pub unsafe fn cbor_decode_into_context<'de, T>(
     mut memory_context: PgMemoryContexts,
-    input: *mut pg_sys::varlena,
+    input: PgPtr<pg_sys::varlena>,
 ) -> T
 where
     T: Deserialize<'de>,
 {
     memory_context.switch_to(|_| {
         // this gets the varlena Datum copied into this memory context
-        let varlena = pg_sys::pg_detoast_datum_copy(input as *mut pg_sys::varlena);
+        let varlena = pg_sys::pg_detoast_datum_copy(input);
         cbor_decode(varlena)
     })
 }
@@ -404,18 +403,18 @@ where
     let size = serialized.len() as usize;
     let varlena = serialized.into_char_ptr();
     unsafe {
-        set_varsize(varlena as *mut pg_sys::varlena, size as i32);
+        set_varsize(PgPtr::from_raw(varlena).cast(), size as i32);
     }
 
     varlena as *const pg_sys::varlena
 }
 
 #[allow(dead_code)]
-unsafe fn json_decode<'de, T>(input: *mut pg_sys::varlena) -> T
+unsafe fn json_decode<'de, T>(input: PgPtr<pg_sys::varlena>) -> T
 where
     T: Deserialize<'de>,
 {
-    let varlena = pg_sys::pg_detoast_datum_packed(input as *mut pg_sys::varlena);
+    let varlena = pg_sys::pg_detoast_datum_packed(input);
     let len = varsize_any_exhdr(varlena);
     let data = vardata_any(varlena);
     let slice = std::slice::from_raw_parts(data as *const u8, len);

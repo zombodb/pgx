@@ -426,7 +426,11 @@ impl PgGuardRewriter {
         } else {
             false
         };
-        let is_no_mangle = func.attrs.iter().find(|attr| (attr.path.clone().into_token_stream().to_string() == "no_mangle")).is_some();
+        let is_no_mangle = func
+            .attrs
+            .iter()
+            .find(|attr| (attr.path.clone().into_token_stream().to_string() == "no_mangle"))
+            .is_some();
 
         // but for the inner function (the one we're wrapping) we don't need any kind of
         // abi classification
@@ -459,8 +463,7 @@ impl PgGuardRewriter {
                 quote! {
                     #[no_mangle]
                 }
-            }
-            else {
+            } else {
                 quote! {}
             }
         } else {
@@ -520,7 +523,7 @@ impl PgGuardRewriter {
                 let jump_value = pg_sys::sigsetjmp(jmp_buff.as_mut_ptr(), 0);
 
                 let result = if jump_value == 0 {
-                    pg_sys::PG_exception_stack = jmp_buff.as_mut_ptr();
+                    pg_sys::PG_exception_stack = pg_sys::PgPtr::from_raw(jmp_buff.as_mut_ptr()); // jmp_buff.as_mut_ptr();
                     #func_name(#arg_list)
                 } else {
                     pg_sys::PG_exception_stack = prev_exception_stack;

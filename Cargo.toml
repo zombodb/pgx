@@ -14,6 +14,7 @@ members = [
     "cargo-pgx",
     "pgx",
     "pgx-macros",
+    "pgx-pg-bindings-generator",
     "pgx-pg-sys",
     "pgx-tests",
     "pgx-utils",

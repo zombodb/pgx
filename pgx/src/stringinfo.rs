@@ -4,7 +4,9 @@
 //! A safe wrapper around Postgres `StringInfo` structure
 #![allow(dead_code, non_snake_case)]
 
-use crate::{pg_sys, void_mut_ptr};
+use crate::{pg_sys, void_mut_ptr, PgPtr};
+use bitflags::_core::fmt::Formatter;
+use std::fmt::Display;
 use std::io::Error;
 
 /// StringInfoData holds information about an extensible string that is allocated by Postgres'
@@ -23,11 +25,10 @@ impl Into<pg_sys::StringInfo> for StringInfo {
 impl Into<&'static std::ffi::CStr> for StringInfo {
     fn into(self) -> &'static std::ffi::CStr {
         let len = self.len();
-        let ptr = self.into_char_ptr();
 
         unsafe {
             std::ffi::CStr::from_bytes_with_nul_unchecked(std::slice::from_raw_parts(
-                ptr as *const u8,
+                self.sid.data.as_ptr() as *mut u8,
                 (len + 1) as usize, // +1 to get the trailing null byte
             ))
         }
@@ -45,9 +46,15 @@ impl std::io::Write for StringInfo {
     }
 }
 
-impl ToString for StringInfo {
-    fn to_string(&self) -> String {
-        unsafe { std::str::from_utf8_unchecked(self.as_bytes()).to_owned() }
+impl AsRef<str> for StringInfo {
+    fn as_ref(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.as_bytes()) }
+    }
+}
+
+impl Display for StringInfo {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(fmt, "{}", self.as_ref())
     }
 }
 
@@ -125,7 +132,7 @@ impl StringInfo {
         unsafe {
             pg_sys::appendBinaryStringInfo(
                 self.sid,
-                bytes.as_ptr() as *const std::os::raw::c_char,
+                PgPtr::from_raw(bytes.as_ptr()).cast(),
                 bytes.len() as i32,
             )
         }
@@ -135,9 +142,7 @@ impl StringInfo {
     #[inline]
     pub fn push_raw(&mut self, ptr: void_mut_ptr, len: usize) {
         // safe:  self.sid will never be null
-        unsafe {
-            pg_sys::appendBinaryStringInfo(self.sid, ptr as *const std::os::raw::c_char, len as i32)
-        }
+        unsafe { pg_sys::appendBinaryStringInfo(self.sid, PgPtr::from_raw(ptr).cast(), len as i32) }
     }
 
     /// Reset the size of the `StringInfo` back to zero-length.  This does/// *not** free any
@@ -157,9 +162,9 @@ impl StringInfo {
 
     /// A pointer representation
     #[inline]
-    pub fn as_ptr(&self) -> *mut std::os::raw::c_char {
+    pub fn as_ptr(&self) -> *const std::os::raw::c_char {
         // safe:  self.sid will never be null
-        unsafe { (*self.sid).data }
+        self.sid.data.as_ptr()
     }
 
     /// A `&[u8]` byte slice representation
@@ -171,7 +176,7 @@ impl StringInfo {
                 return &[];
             }
 
-            std::slice::from_raw_parts((*self.sid).data as *const u8, self.len())
+            std::slice::from_raw_parts(self.sid.as_ptr() as *const u8, self.len())
         }
     }
 
@@ -184,13 +189,13 @@ impl StringInfo {
                 return &mut [];
             }
 
-            std::slice::from_raw_parts_mut((*self.sid).data as *mut u8, self.len())
+            std::slice::from_raw_parts_mut(self.sid.as_mut_ptr() as *mut u8, self.len())
         }
     }
 
     /// Convert this `StringInfo` into one that is wholly owned and now managed by Postgres
     #[inline]
-    pub fn into_pg(mut self) -> *mut pg_sys::StringInfoData {
+    pub fn into_pg(mut self) -> PgPtr<pg_sys::StringInfoData> {
         self.needs_pfree = false;
         self.sid
     }
@@ -202,8 +207,8 @@ impl StringInfo {
         // safe:  self.sid will never be null
         unsafe {
             let ptr = (*self.sid).data;
-            (&mut *self.sid).data = std::ptr::null_mut();
-            ptr as *const std::os::raw::c_char
+            (&mut *self.sid).data = PgPtr::from_raw(std::ptr::null_mut());
+            ptr.cast::<std::os::raw::c_char>().as_ptr()
         }
     }
 }
@@ -250,12 +255,10 @@ impl Drop for StringInfo {
         // given to us from Postgres
         if self.needs_pfree {
             // safe:  self.sid will never be null
-            unsafe {
-                if !(*self.sid).data.is_null() {
-                    pg_sys::pfree((*self.sid).data as void_mut_ptr);
-                }
-                pg_sys::pfree(self.sid as void_mut_ptr);
+            if !(*self.sid).data.is_null() {
+                self.sid.data.free();
             }
+            self.sid.free();
         }
     }
 }

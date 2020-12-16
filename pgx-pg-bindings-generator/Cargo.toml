@@ -1,0 +1,17 @@
+[package]
+name = "pgx-pg-bindings-generator"
+version = "0.1.6"
+authors = ["ZomboDB, LLC <zombodb@gmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "Postgres Bindings Generator for `pgx`"
+homepage = "https://github.com/zombodb/pgx/"
+repository = "https://github.com/zombodb/pgx/"
+
+[dependencies]
+bindgen = "0.56.0"
+pgx-utils = { path = "../pgx-utils", version = "0.1.6" }
+memoffset = "0.6.1"
+proc-macro2 = "1.0.24"
+quote = "1.0.7"
+syn = { version = "1.0.53", features = [ "extra-traits", "full", "fold", "parsing" ] }

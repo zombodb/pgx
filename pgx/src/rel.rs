@@ -3,45 +3,26 @@
 
 //! Provides a safe wrapper around Postgres' `pg_sys::RelationData` struct
 use crate::{
-    direct_function_call, name_data_to_str, pg_sys, FromDatum, IntoDatum, PgBox, PgList,
-    PgTupleDesc,
+    direct_function_call, name_data_to_str, pg_sys, FromDatum, IntoDatum, PgPtr, PgTupleDesc,
 };
+use pgx_pg_sys::RelationData;
 use std::ops::Deref;
 
 pub struct PgRelation {
-    boxed: PgBox<pg_sys::RelationData>,
-    need_close: bool,
+    boxed: PgPtr<pg_sys::RelationData>,
     lockmode: Option<pg_sys::LOCKMODE>,
 }
 
+impl From<PgPtr<pg_sys::RelationData>> for PgRelation {
+    fn from(r: PgPtr<pg_sys::RelationData>) -> Self {
+        PgRelation {
+            boxed: r,
+            lockmode: None,
+        }
+    }
+}
+
 impl PgRelation {
-    /// Wrap a Postgres-provided `pg_sys::Relation`.
-    ///
-    /// It is assumed that Postgres will later `RelationClose()` the provided relation pointer.
-    /// As such, it is not closed when this instance is dropped
-    ///
-    /// ## Safety
-    ///
-    /// This method is unsafe as we cannot ensure that this relation will later be closed by Postgres
-    pub unsafe fn from_pg(ptr: pg_sys::Relation) -> Self {
-        PgRelation {
-            boxed: PgBox::from_pg(ptr),
-            need_close: false,
-            lockmode: None,
-        }
-    }
-
-    /// Wrap a Postgres-provided `pg_sys::Relation`.
-    ///
-    /// The provided `Relation` will be closed via `pg_sys::RelationClose` when this instance is dropped
-    pub fn from_pg_owned(ptr: pg_sys::Relation) -> Self {
-        PgRelation {
-            boxed: PgBox::from_pg(ptr),
-            need_close: true,
-            lockmode: None,
-        }
-    }
-
     /// Given a relation oid, use `pg_sys::RelationIdGetRelation()` to open the relation
     ///
     /// If the specified relation oid was recently deleted, this function will panic.
@@ -63,8 +44,7 @@ impl PgRelation {
         }
 
         PgRelation {
-            boxed: PgBox::from_pg(rel),
-            need_close: true,
+            boxed: rel,
             lockmode: None,
         }
     }
@@ -86,8 +66,7 @@ impl PgRelation {
     pub fn with_lock(oid: pg_sys::Oid, lockmode: pg_sys::LOCKMODE) -> Self {
         unsafe {
             PgRelation {
-                boxed: PgBox::from_pg(pg_sys::relation_open(oid, lockmode)),
-                need_close: true,
+                boxed: pg_sys::relation_open(oid, lockmode),
                 lockmode: Some(lockmode),
             }
         }
@@ -140,152 +119,26 @@ impl PgRelation {
         }
     }
 
-    /// RelationGetRelationName
-    ///            Returns the rel's name.
-    ///
-    /// Note that the name is only unique within the containing namespace.
-    pub fn name(&self) -> &str {
-        let rd_rel = unsafe { self.boxed.rd_rel.as_ref() }.unwrap();
-        name_data_to_str(&rd_rel.relname)
-    }
-
-    /// RelationGetRelid
-    ///          Returns the OID of the relation
-    #[inline]
-    pub fn oid(&self) -> pg_sys::Oid {
-        let rel = &self.boxed;
-        rel.rd_id
-    }
-
-    /// RelationGetNamespace
-    ///            Returns the rel's namespace OID.
-    pub fn namespace_oid(&self) -> pg_sys::Oid {
-        let rd_rel: PgBox<pg_sys::FormData_pg_class> = PgBox::from_pg(self.boxed.rd_rel);
-        rd_rel.relnamespace
-    }
-
-    /// What is the name of the namespace in which this relation is located?
-    pub fn namespace(&self) -> &str {
-        unsafe { std::ffi::CStr::from_ptr(pg_sys::get_namespace_name(self.namespace_oid())) }
-            .to_str()
-            .expect("unable to convert namespace name to UTF8")
-    }
-
     /// If this `PgRelation` represents an index, return the `PgRelation` for the heap
     /// relation to which it is attached
-    pub fn heap_relation(&self) -> Option<PgRelation> {
-        let rd_index: PgBox<pg_sys::FormData_pg_index> = PgBox::from_pg(self.boxed.rd_index);
-        if rd_index.is_null() {
+    pub fn heap_relation(&self) -> Option<PgPtr<RelationData>> {
+        if self.rd_index.is_null() {
             None
         } else {
-            Some(unsafe { PgRelation::open(rd_index.indrelid) })
+            unsafe { Some(PgPtr::<RelationData>::open(self.rd_index.indrelid)) }
         }
     }
 
     /// Return an iterator of indices, as `PgRelation`s, attached to this relation
-    pub fn indicies(
+    pub fn indices(
         &self,
-        lockmode: pg_sys::LOCKMODE,
-    ) -> impl std::iter::Iterator<Item = PgRelation> {
-        let list = PgList::<pg_sys::Oid>::from_pg(unsafe {
-            pg_sys::RelationGetIndexList(self.boxed.as_ptr())
-        });
+        lockmode: crate::LOCKMODE,
+    ) -> impl std::iter::Iterator<Item = PgPtr<RelationData>> {
+        let list = unsafe { crate::RelationGetIndexList(self.clone()) };
 
         list.iter_oid()
-            .filter(|oid| *oid != pg_sys::InvalidOid)
-            .map(|oid| PgRelation::with_lock(oid, lockmode))
-            .collect::<Vec<PgRelation>>()
-            .into_iter()
-    }
-
-    /// Returned a wrapped `PgTupleDesc`
-    ///
-    /// The returned `PgTupleDesc` is tied to the lifetime of this `PgRelation` instance.
-    ///
-    /// ```rust,no_run
-    /// use pgx::{PgRelation, pg_sys};
-    /// let oid = 42;   // a valid pg_class "oid" value
-    /// let relation = unsafe { PgRelation::from_pg(pg_sys::RelationIdGetRelation(oid) ) };
-    /// let tupdesc = relation.tuple_desc();
-    ///
-    /// // assert that the tuple descriptor has 12 attributes
-    /// assert_eq!(tupdesc.len(), 12);
-    /// ```
-    pub fn tuple_desc(&self) -> PgTupleDesc {
-        PgTupleDesc::from_relation(&self)
-    }
-
-    /// Number of tuples in this relation (not always up-to-date)
-    pub fn reltuples(&self) -> Option<f32> {
-        let reltuples = unsafe { self.boxed.rd_rel.as_ref() }
-            .expect("rd_rel is NULL")
-            .reltuples;
-
-        if reltuples == 0f32 {
-            None
-        } else {
-            Some(reltuples)
-        }
-    }
-
-    pub fn is_table(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_RELATION as i8
-    }
-
-    pub fn is_matview(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_MATVIEW as i8
-    }
-
-    pub fn is_index(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_INDEX as i8
-    }
-
-    pub fn is_view(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_VIEW as i8
-    }
-
-    pub fn is_sequence(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_SEQUENCE as i8
-    }
-
-    pub fn is_composite_type(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_COMPOSITE_TYPE as i8
-    }
-
-    pub fn is_foreign_table(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_FOREIGN_TABLE as i8
-    }
-
-    pub fn is_partitioned_table(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_PARTITIONED_TABLE as i8
-    }
-
-    pub fn is_toast_value(&self) -> bool {
-        let rd_rel: &pg_sys::FormData_pg_class =
-            unsafe { self.boxed.rd_rel.as_ref().expect("rd_rel is NULL") };
-        rd_rel.relkind == pg_sys::RELKIND_TOASTVALUE as i8
-    }
-
-    /// ensures that the returned `PgRelation` is closed by Rust when it is dropped
-    pub fn to_owned(mut self) -> Self {
-        self.need_close = true;
-        self
+            .filter(|oid| *oid != crate::InvalidOid)
+            .map(move |oid| PgPtr::<RelationData>::with_lock(oid, lockmode))
     }
 }
 
@@ -315,12 +168,12 @@ impl IntoDatum for PgRelation {
     }
 
     fn type_oid() -> u32 {
-        pg_sys::REGCLASSOID
+        pg_sys::REGCLASSOID as pg_sys::Oid
     }
 }
 
 impl Deref for PgRelation {
-    type Target = PgBox<pg_sys::RelationData>;
+    type Target = PgPtr<pg_sys::RelationData>;
 
     fn deref(&self) -> &Self::Target {
         &self.boxed
@@ -330,13 +183,9 @@ impl Deref for PgRelation {
 impl Drop for PgRelation {
     fn drop(&mut self) {
         if !self.boxed.is_null() {
-            if self.need_close {
-                match self.lockmode {
-                    None => unsafe { pg_sys::RelationClose(self.boxed.as_ptr()) },
-                    Some(lockmode) => unsafe {
-                        pg_sys::relation_close(self.boxed.as_ptr(), lockmode)
-                    },
-                }
+            match self.lockmode {
+                None => unsafe { pg_sys::RelationClose(self.boxed) },
+                Some(lockmode) => unsafe { pg_sys::relation_close(self.boxed, lockmode) },
             }
         }
     }

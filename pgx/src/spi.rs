@@ -3,7 +3,9 @@
 
 //! Safe access to Postgres' *Server Programming Interface* (SPI).
 
-use crate::{pg_sys, FromDatum, IntoDatum, Json, PgMemoryContexts, PgOid};
+use crate::{
+    pg_sys, AsPgCStr, FromDatum, IntoDatum, IntoPgPtr, Json, PgMemoryContexts, PgOid, PgPtr,
+};
 use enum_primitive_derive::*;
 use num_traits::FromPrimitive;
 use std::collections::HashMap;
@@ -56,10 +58,9 @@ pub struct Spi;
 
 pub struct SpiClient;
 
-#[derive(Debug)]
 pub struct SpiTupleTable {
     status_code: SpiOk,
-    table: *mut pg_sys::SPITupleTable,
+    table: PgPtr<pg_sys::SPITupleTable>,
     size: usize,
     tupdesc: Option<pg_sys::TupleDesc>,
     current: isize,
@@ -315,46 +316,47 @@ impl SpiClient {
         args: Option<Vec<(PgOid, Option<pg_sys::Datum>)>>,
     ) -> SpiTupleTable {
         unsafe {
-            pg_sys::SPI_tuptable = std::ptr::null_mut();
+            pg_sys::SPI_tuptable = PgPtr::null_mut();
         }
 
-        let src = std::ffi::CString::new(query).expect("query contained a null byte");
         let status_code = match args {
             Some(args) => {
                 let nargs = args.len();
-                let mut argtypes = vec![];
-                let mut datums = vec![];
-                let mut nulls = vec![];
+                let mut argtypes = PgPtr::array(nargs);
+                let mut datums = PgPtr::array(nargs);
+                let mut nulls = PgPtr::array(nargs);
 
-                for (argtype, datum) in args {
-                    argtypes.push(argtype.value());
+                for (i, (argtype, datum)) in args.into_iter().enumerate() {
+                    argtypes[i] = argtype.value();
 
                     match datum {
                         Some(datum) => {
-                            datums.push(datum);
-                            nulls.push(0 as std::os::raw::c_char);
+                            datums[i] = datum;
+                            nulls[i] = 0;
                         }
 
                         None => {
-                            datums.push(0);
-                            nulls.push(1 as std::os::raw::c_char);
+                            datums[i] = 0;
+                            nulls[i] = 1 as std::os::raw::c_char;
                         }
                     }
                 }
 
                 unsafe {
                     pg_sys::SPI_execute_with_args(
-                        src.as_ptr(),
+                        query.as_pg_cstr(),
                         nargs as i32,
-                        argtypes.as_mut_ptr(),
-                        datums.as_mut_ptr(),
-                        nulls.as_mut_ptr(),
+                        argtypes.into_pg(),
+                        datums.into_pg(),
+                        nulls.into_pg(),
                         read_only,
                         limit.unwrap_or(0),
                     )
                 }
             }
-            None => unsafe { pg_sys::SPI_execute(src.as_ptr(), read_only, limit.unwrap_or(0)) },
+            None => unsafe {
+                pg_sys::SPI_execute(query.as_pg_cstr(), read_only, limit.unwrap_or(0))
+            },
         };
 
         SpiTupleTable {
@@ -364,7 +366,7 @@ impl SpiClient {
             tupdesc: if unsafe { pg_sys::SPI_tuptable }.is_null() {
                 None
             } else {
-                Some(unsafe { (*pg_sys::SPI_tuptable).tupdesc })
+                Some(unsafe { pg_sys::SPI_tuptable.tupdesc })
             },
             current: -1,
         }
@@ -418,8 +420,9 @@ impl SpiTupleTable {
         } else {
             match self.tupdesc {
                 Some(tupdesc) => unsafe {
-                    let heap_tuple = std::slice::from_raw_parts((*self.table).vals, self.size)
-                        [self.current as usize];
+                    let heap_tuple =
+                        std::slice::from_raw_parts(self.table.vals.as_ptr(), self.size)
+                            [self.current as usize];
                     Some(SpiHeapTupleData::new(tupdesc, heap_tuple))
                 },
                 None => panic!("TupDesc is NULL"),
@@ -441,13 +444,13 @@ impl SpiTupleTable {
                     if ordinal < 1 || ordinal > natts {
                         None
                     } else {
-                        let heap_tuple = std::slice::from_raw_parts((*self.table).vals, self.size)
-                            [self.current as usize];
-                        let mut is_null = false;
-                        let datum =
-                            pg_sys::SPI_getbinval(heap_tuple, tupdesc, ordinal, &mut is_null);
+                        let heap_tuple =
+                            std::slice::from_raw_parts(self.table.vals.as_ptr(), self.size)
+                                [self.current as usize];
+                        let mut is_null = PgPtr::null_mut();
+                        let datum = pg_sys::SPI_getbinval(heap_tuple, tupdesc, ordinal, is_null);
 
-                        T::from_datum(datum, is_null, pg_sys::SPI_gettypeid(tupdesc, ordinal))
+                        T::from_datum(datum, *is_null, pg_sys::SPI_gettypeid(tupdesc, ordinal))
                     }
                 },
                 None => panic!("TupDesc is NULL"),
@@ -458,21 +461,21 @@ impl SpiTupleTable {
 
 impl SpiHeapTupleData {
     /// Create a new `SpiHeapTupleData` from its constituent parts
-    pub fn new(tupdesc: pg_sys::TupleDesc, htup: *mut pg_sys::HeapTupleData) -> Self {
+    pub fn new(tupdesc: pg_sys::TupleDesc, htup: PgPtr<pg_sys::HeapTupleData>) -> Self {
         let mut data = SpiHeapTupleData {
             tupdesc,
             entries: HashMap::default(),
         };
 
         unsafe {
-            for i in 1..=tupdesc.as_ref().unwrap().natts {
-                let mut is_null = false;
-                let datum = pg_sys::SPI_getbinval(htup, tupdesc, i, &mut is_null);
+            for i in 1..=tupdesc.natts {
+                let mut is_null = PgPtr::null_mut();
+                let datum = pg_sys::SPI_getbinval(htup, tupdesc, i, is_null);
 
                 data.entries
                     .entry(i as usize)
                     .or_insert_with(|| SpiHeapTupleDataEntry {
-                        datum: if is_null { None } else { Some(datum) },
+                        datum: if *is_null { None } else { Some(datum) },
                         type_oid: pg_sys::SPI_gettypeid(tupdesc, i),
                     });
             }
@@ -564,7 +567,7 @@ impl SpiHeapTupleData {
         datum: T,
     ) -> std::result::Result<(), SpiError> {
         unsafe {
-            if ordinal < 1 || ordinal > self.tupdesc.as_ref().unwrap().natts as usize {
+            if ordinal < 1 || ordinal > self.tupdesc.natts as usize {
                 Err(SpiError::Noattribute)
             } else {
                 self.entries.insert(

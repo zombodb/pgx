@@ -14,7 +14,7 @@ readme = "README.md"
 proc-macro = true
 
 [dependencies]
-pgx-utils = { path = "../pgx-utils", version= "^0.1.1"}
+pgx-utils = { path = "../pgx-utils", version= "0.1.6"}
 proc-macro2 = "1.0.24"
 quote = "1.0.7"
 syn = { version = "1.0.53", features = [ "extra-traits", "full", "fold", "parsing" ] }

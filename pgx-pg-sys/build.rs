@@ -1,9 +1,10 @@
 // Copyright 2020 ZomboDB, LLC <zombodb@gmail.com>. All rights reserved. Use of this source code is
 // governed by the MIT license that can be found in the LICENSE file.
-
+#![allow(dead_code)]
 extern crate build_deps;
 
 use bindgen::callbacks::MacroParsingBehavior;
+use pgx_pg_bindings_generator::{PgBindingsGenerator, PgBindingsRewriter};
 use pgx_utils::pg_config::{PgConfig, PgConfigSelector, Pgx};
 use pgx_utils::{exit_with_error, handle_result, prefix_path};
 use quote::quote;
@@ -89,18 +90,16 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         include_h.push("include");
         include_h.push(format!("pg{}.h", major_version));
 
-        let bindgen_output = handle_result!(
-            run_bindgen(&pg_config, &include_h),
-            format!("bindgen failed for pg{}", major_version)
-        );
-
-        let rewritten_items = handle_result!(
-            rewrite_items(&bindgen_output),
-            format!("failed to rewrite items for pg{}", major_version)
-        );
-
+        let mut bindings_file = out_dir.clone();
+        bindings_file.push(&format!("pg{}.rs", major_version));
+        let bindings = PgBindingsGenerator::new(&include_h, pg_config)
+            .generate()
+            .expect("failed to generate bindings");
+        let bindings = PgBindingsRewriter::new(bindings)
+            .rewrite()
+            .expect("PgPtrRewriter failed");
         let oids = handle_result!(
-            extract_oids(&bindgen_output),
+            extract_oids(&bindings),
             format!("unable to generate oids for pg{}", major_version)
         );
 
@@ -108,12 +107,13 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         bindings_file.push(&format!("pg{}.rs", major_version));
         handle_result!(
             write_rs_file(
-                rewritten_items,
+                bindings.to_token_stream(),
                 &bindings_file,
                 quote! {
                     use crate as pg_sys;
+                    use crate::PgPtr;
+                    use crate::pgptr::New;
                     use pgx_macros::*;
-                    use crate::PgNode;
                 }
             ),
             format!("Unable to write bindings file for pg{}", major_version)
@@ -149,19 +149,19 @@ fn write_rs_file(
     rust_fmt(&file)
 }
 
-/// Given a token stream representing a file, apply a series of transformations to munge
-/// the bindgen generated code with some postgres specific enhancements
-fn rewrite_items(file: &syn::File) -> Result<TokenStream2, Box<dyn Error + Send + Sync>> {
-    let items = apply_pg_guard(&file.items)?;
-    let pgnode_impls = impl_pg_node(&items)?;
-
-    let mut stream = TokenStream2::new();
-    for item in items.into_iter().chain(pgnode_impls.into_iter()) {
-        stream.extend(quote! { #item });
-    }
-
-    Ok(stream)
-}
+// /// Given a token stream representing a file, apply a series of transformations to munge
+// /// the bindgen generated code with some postgres specific enhancements
+// fn rewrite_items(file: &syn::File) -> Result<TokenStream2, Box<dyn Error + Send + Sync>> {
+//     let items = apply_pg_guard(&file.items)?;
+//     let pgnode_impls = impl_pg_node(&items)?;
+//
+//     let mut stream = TokenStream2::new();
+//     for item in items.into_iter().chain(pgnode_impls.into_iter()) {
+//         stream.extend(quote! { #item });
+//     }
+//
+//     Ok(stream)
+// }
 
 /// Find all the constants that represent Postgres type OID values.
 ///
@@ -176,7 +176,7 @@ fn extract_oids(code: &syn::File) -> Result<TokenStream2, Box<dyn Error>> {
                 let name = ident.to_string();
                 let ty = &c.ty.to_token_stream().to_string();
 
-                if ty == "u32" && name.ends_with("OID") && name != "HEAP_HASOID" {
+                if ty == "i32" && name.ends_with("OID") && name != "HEAP_HASOID" {
                     enum_variants.extend(quote! {#ident = crate::#ident as isize, });
                     from_impl.extend(quote! {crate::#ident => Some(crate::PgBuiltInOids::#ident), })
                 }
@@ -193,7 +193,7 @@ fn extract_oids(code: &syn::File) -> Result<TokenStream2, Box<dyn Error>> {
 
         impl PgBuiltInOids {
             pub fn from(oid: crate::Oid) -> Option<PgBuiltInOids> {
-                match oid {
+                match oid as i32 {
                     #from_impl
                     _ => None,
                 }
@@ -569,25 +569,6 @@ fn run_command(mut command: &mut Command, version: &str) -> Result<Output, std::
 
     eprintln!("{}", dbg);
     Ok(rc)
-}
-
-fn apply_pg_guard(items: &Vec<syn::Item>) -> Result<Vec<syn::Item>, Box<dyn Error + Send + Sync>> {
-    let mut out = Vec::with_capacity(items.len());
-    for item in items.into_iter() {
-        match item {
-            Item::ForeignMod(block) => {
-                out.push(syn::parse2(quote! {
-                    #[pg_guard]
-                    #block
-                })?);
-            }
-            _ => {
-                out.push(item.clone());
-            }
-        }
-    }
-
-    Ok(out)
 }
 
 fn rust_fmt(path: &PathBuf) -> Result<(), std::io::Error> {

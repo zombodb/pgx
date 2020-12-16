@@ -164,7 +164,7 @@ pub enum PgBuiltInOids {
 }
 impl PgBuiltInOids {
     pub fn from(oid: crate::Oid) -> Option<PgBuiltInOids> {
-        match oid {
+        match oid as i32 {
             crate::HEAP_TABLE_AM_HANDLER_OID => {
                 Some(crate::PgBuiltInOids::HEAP_TABLE_AM_HANDLER_OID)
             }
