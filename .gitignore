@@ -8,3 +8,4 @@ Cargo.lock
 *.so
 *.a
 cmake*/
+.direnv
