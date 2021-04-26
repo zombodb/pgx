@@ -291,7 +291,12 @@ fn walk_items(
         if let Item::Mod(module) = item {
             module.attrs;
             if let Some((_, items)) = module.content {
-                schema_stack.push(module.ident.to_string());
+                let schema = module.ident.to_string();
+                schema_stack.push(schema.clone());
+                sql.push(format!(
+                    "CREATE SCHEMA IF NOT EXISTS {};",
+                    schema
+                ));
                 walk_items(
                     rs_file,
                     &mut sql,
@@ -524,7 +529,7 @@ fn walk_items(
                         }
                     }
 
-                    // for #[pg_extern] attributes, we only want to programatically generate
+                    // for #[pg_extern] attributes, we only want to programmatically generate
                     // a CREATE FUNCTION statement if we don't already have some
                     CategorizedAttribute::PgExtern(span, extern_args, funcargs)
                         if function_sql.is_empty() =>

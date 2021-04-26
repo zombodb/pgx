@@ -7,6 +7,7 @@ mod complex;
 mod fixed_size;
 mod generic_enum;
 mod hstore_clone;
+mod submodule;
 
 pg_module_magic!();
 
