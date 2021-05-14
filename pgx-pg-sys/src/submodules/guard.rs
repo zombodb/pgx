@@ -5,7 +5,8 @@
 
 use crate::FlushErrorState;
 use std::any::Any;
-use std::cell::Cell;
+use std::sync::Mutex;
+use once_cell::sync::{Lazy, OnceCell};
 use std::panic::catch_unwind;
 
 extern "C" {
@@ -49,10 +50,11 @@ struct PanicLocation {
     col: u32,
 }
 
-thread_local! { static PANIC_LOCATION: Cell<Option<PanicLocation>> = Cell::new(None) }
+static PANIC_LOCATION: Lazy<Mutex<Option<PanicLocation>>> = Lazy::new(|| Mutex::new(None));
 
 fn take_panic_location() -> PanicLocation {
-    PANIC_LOCATION.with(|p| match p.take() {
+    let mut panic_location = PANIC_LOCATION.lock().unwrap();
+    match panic_location.take() {
         Some(location) => location,
 
         // this case shouldn't happen
@@ -61,30 +63,30 @@ fn take_panic_location() -> PanicLocation {
             line: 0,
             col: 0,
         },
-    })
+    }
 }
 
 // via pg_module_magic!() this gets set to Some(()) for the "main" thread, and remains at None
 // for all other threads.
 #[cfg(debug_assertions)]
-thread_local! { pub(crate) static IS_MAIN_THREAD: once_cell::sync::OnceCell<()> = once_cell::sync::OnceCell::new() }
+pub(crate) static IS_MAIN_THREAD: OnceCell<()> = OnceCell::new();
 
 pub fn register_pg_guard_panic_handler() {
     // first, lets ensure we're not calling ourselves twice
     #[cfg(debug_assertions)]
     {
-        if IS_MAIN_THREAD.with(|v| v.get().is_some()) {
+        if IS_MAIN_THREAD.get().is_some() {
             panic!("IS_MAIN_THREAD has already been set")
         }
 
         // it's expected that this function will only ever be called by `pg_module_magic!()` by the main thread
-        IS_MAIN_THREAD.with(|v| v.set(()).expect("failed to set main thread sentinel"));
+        IS_MAIN_THREAD.set(()).expect("failed to set main thread sentinel");
     }
 
     std::panic::set_hook(Box::new(|info| {
         #[cfg(debug_assertions)]
         {
-            if IS_MAIN_THREAD.with(|v| v.get().is_none()) {
+            if IS_MAIN_THREAD.get().is_none() {
                 // a thread that isn't the main thread panic!()d
                 // we make a best effort to push a message to stderr, which hopefully
                 // Postgres is logging somewhere
@@ -97,22 +99,18 @@ pub fn register_pg_guard_panic_handler() {
             }
         }
 
-        PANIC_LOCATION.with(|p| {
-            let existing = p.take();
+        let mut panic_location = PANIC_LOCATION.lock().unwrap();
 
-            p.replace(if existing.is_none() {
-                match info.location() {
-                    Some(location) => Some(PanicLocation {
-                        file: location.file().to_string(),
-                        line: location.line(),
-                        col: location.column(),
-                    }),
-                    None => None,
-                }
-            } else {
-                existing
-            })
-        });
+        match info.location() {
+            Some(location) => {
+                panic_location.get_or_insert_with(|| PanicLocation {
+                    file: location.file().to_string(),
+                    line: location.line(),
+                    col: location.column(),
+                });
+            },
+            None => (),
+        }
     }))
 }
 
