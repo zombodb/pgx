@@ -6,6 +6,7 @@
 use crate::FlushErrorState;
 use std::any::Any;
 use std::sync::Mutex;
+use std::thread::{self, ThreadId};
 use once_cell::sync::{Lazy, OnceCell};
 use std::panic::catch_unwind;
 
@@ -69,7 +70,7 @@ fn take_panic_location() -> PanicLocation {
 // via pg_module_magic!() this gets set to Some(()) for the "main" thread, and remains at None
 // for all other threads.
 #[cfg(debug_assertions)]
-pub(crate) static IS_MAIN_THREAD: OnceCell<()> = OnceCell::new();
+pub(crate) static IS_MAIN_THREAD: OnceCell<ThreadId> = OnceCell::new();
 
 pub fn register_pg_guard_panic_handler() {
     // first, lets ensure we're not calling ourselves twice
@@ -80,20 +81,20 @@ pub fn register_pg_guard_panic_handler() {
         }
 
         // it's expected that this function will only ever be called by `pg_module_magic!()` by the main thread
-        IS_MAIN_THREAD.set(()).expect("failed to set main thread sentinel");
+        IS_MAIN_THREAD.set(thread::current().id()).expect("failed to set main thread sentinel");
     }
 
     std::panic::set_hook(Box::new(|info| {
         #[cfg(debug_assertions)]
         {
-            if IS_MAIN_THREAD.get().is_none() {
+            if IS_MAIN_THREAD.get() != Some(&thread::current().id()) {
                 // a thread that isn't the main thread panic!()d
                 // we make a best effort to push a message to stderr, which hopefully
                 // Postgres is logging somewhere
                 eprintln!(
                     "thread={:?}, id={:?}, {}",
-                    std::thread::current().name(),
-                    std::thread::current().id(),
+                    thread::current().name(),
+                    thread::current().id(),
                     info
                 );
             }
