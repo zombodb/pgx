@@ -25,4 +25,4 @@ serde_json = "1.0.64"
 syn = { version = "1.0.71", features = [ "extra-traits", "full", "fold", "parsing" ] }
 toml = "0.5.8"
 unescape = "0.1.0"
-url = "2.2.1"
+url = "2.2.2"
