@@ -624,6 +624,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0c35f58762feb77d74ebe43bdbc3210f09be9fe6742234d573bacc26ed92b67"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "heapless"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -631,7 +640,7 @@ checksum = "634bd4d29cbf24424d0a4bfcbf80c6960129dc24424752a7d1d1390607023422"
 dependencies = [
  "as-slice",
  "generic-array 0.14.4",
- "hash32",
+ "hash32 0.1.1",
  "stable_deref_trait",
 ]
 
@@ -963,7 +972,7 @@ dependencies = [
  "atomic-traits",
  "bitflags",
  "enum-primitive-derive",
- "hash32",
+ "hash32 0.2.1",
  "heapless",
  "num-traits",
  "once_cell",
