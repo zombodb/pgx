@@ -23,7 +23,7 @@ pgx-utils = { path = "../pgx-utils", version = "0.1.21"}
 proc-macro2 = { version = "1.0.26", features = [ "span-locations" ] }
 quote = "1.0.9"
 rayon = "1.5.0"
-regex = "1.5.2"
+regex = "1.5.4"
 rttp_client = { version = "0.1.0", features = ["tls-native"] }
 syn = { version = "1.0.71", features = [ "extra-traits", "full", "fold", "parsing" ] }
 unescape = "0.1.0"
