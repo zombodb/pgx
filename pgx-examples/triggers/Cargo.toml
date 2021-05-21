@@ -1,0 +1,34 @@
+[package]
+name = "triggers"
+version = "0.0.0"
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[workspace]
+
+[features]
+default = ["pg13"]
+pg10 = ["pgx/pg10", "pgx-tests/pg10" ]
+pg11 = ["pgx/pg11", "pgx-tests/pg11" ]
+pg12 = ["pgx/pg12", "pgx-tests/pg12" ]
+pg13 = ["pgx/pg13", "pgx-tests/pg13" ]
+pg_test = []
+
+[dependencies]
+pgx = { path = "../../../pgx/pgx/", default-features = false }
+pgx-macros = { path = "../../../pgx/pgx-macros" }
+
+[dev-dependencies]
+pgx-tests = { path = "../../../pgx/pgx-tests" }
+
+# uncomment these if compiling outside of 'pgx'
+#[profile.dev]
+#panic = "unwind"
+#
+#[profile.release]
+#panic = "unwind"
+#opt-level = 3
+#lto = "fat"
+#codegen-units = 1

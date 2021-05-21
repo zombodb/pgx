@@ -29,6 +29,7 @@ exclude = [
     "pgx-examples/spi",
     "pgx-examples/srf",
     "pgx-examples/strings",
+    "pgx-examples/triggers",
 ]
 
 [features]

@@ -20,7 +20,7 @@ jobs:
       matrix:
         version: [10, 11, 12, 13]
         os: ["ubuntu-latest"]
-        examples: ["arrays", "bad_ideas", "bgworker", "bytea", "custom_types", "errors", "operators", "schemas", "shmem", "spi", "srf", "strings"]
+        examples: ["arrays", "bad_ideas", "bgworker", "bytea", "custom_types", "errors", "operators", "schemas", "shmem", "spi", "srf", "strings", "triggers"]
 
     steps:
     - uses: actions/checkout@v2
