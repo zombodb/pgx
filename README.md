@@ -16,6 +16,8 @@
 
 `pgx` supports Postgres v10, v11, v12, and v13.
 
+## Community and Support
+
 Feel free to join our [Discord Server](https://discord.gg/hPb93Y9).
 
 ## Key Features
@@ -114,12 +116,15 @@ custom types.
 
 ## System Requirements
 
- - `cargo install rustfmt`
+- `rustc` (minimum version 1.50) and `cargo` 
+- `cargo install rustfmt`
  - `git`
  - `libclang.so`
    - Ubuntu: `libclang-dev` or `clang`
    - RHEL: `clang`
  - [build dependencies for PostgreSQL](https://wiki.postgresql.org/wiki/Compile_and_Install_from_source_code)
+
+Note that a local Postgres installation is not required. `pgx` will download and compile Postgres itself.
 
 ## Getting Started
 
@@ -181,20 +186,33 @@ The first time, compilation takes a few minutes as `pgx` needs to generate almos
 Postgres' header files.
 
 Once compiled you'll be placed in a `psql` shell, for, in this case, Postgres 13.
-Now, we can just [load the extension](https://www.postgresql.org/docs/13/sql-createextension.html) and do a select on the example function.
+Now, we can just [load the extension](https://www.postgresql.org/docs/13/sql-createextension.html) and do a SELECT on the example function.
 
-```sql
-CREATE EXTENSION my_extension;
-SELECT hello_my_extension();
-```
+```console
+my_extension=# CREATE EXTENSION my_extension;
+CREATE EXTENSION
 
-This will return something along the lines of
-
-```
+my_extension=# SELECT hello_my_extension();
  hello_my_extension
 ---------------------
  Hello, my_extension
 (1 row)
+```
+
+
+## Upgrading
+
+You can upgrade your current `pgx` installation by passing the `--force` flag
+to `cargo install`:
+
+```shell script
+$ cargo install --force cargo-pgx
+```
+
+As new Postgres versions are supported by `pgx`, you can re-run the `pgx init` process to download and compile them:
+
+```shell script
+$ cargo pgx init
 ```
 
 ## Digging Deeper

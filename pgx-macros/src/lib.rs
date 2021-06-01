@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, Attribute, Data, DeriveInput, Item, ItemFn};
 
-/// Declare a function as `#[pg_guard]` to indcate that it is called from a Postgres `extern "C"`
+/// Declare a function as `#[pg_guard]` to indicate that it is called from a Postgres `extern "C"`
 /// function so that Rust `panic!()`s (and Postgres `elog(ERROR)`s) will be properly handled by `pgx`
 #[proc_macro_attribute]
 pub fn pg_guard(_attr: TokenStream, item: TokenStream) -> TokenStream {
