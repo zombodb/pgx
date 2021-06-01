@@ -92,9 +92,28 @@ pub use pgx_pg_sys::PgBuiltInOids; // reexport this so it looks like it comes fr
 
 /// A macro for marking a library compatible with the Postgres extension framework.
 ///
-/// This macro was initially inspired from the `pg_module` macro in https://github.com/thehydroimpulse/postgres-extension.rs
+/// Creates a “magic block” that describes the capabilities of the extension to
+/// Postgres at runtime. From the [Dynamic Loading] section of the upstream documentation:
 ///
-/// Shamelessly cribbed from https://github.com/bluejekyll/pg-extend-rs
+/// > To ensure that a dynamically loaded object file is not loaded into an incompatible
+/// > server, PostgreSQL checks that the file contains a “magic block” with the appropriate
+/// > contents. This allows the server to detect obvious incompatibilities, such as code
+/// > compiled for a different major version of PostgreSQL. To include a magic block,
+/// > write this in one (and only one) of the module source files, after having included
+/// > the header `fmgr.h`:
+/// >
+/// > ```c
+/// > PG_MODULE_MAGIC;
+/// > ```
+///
+/// ## Acknowledgements
+///
+/// This macro was initially inspired from the `pg_module` macro by [Daniel Fagnan]
+/// and expanded by [Benjamin Fry].
+///
+/// [Benjamin Fry]: https://github.com/bluejekyll/pg-extend-rs
+/// [Daniel Fagnan]: https://github.com/thehydroimpulse/postgres-extension.rs
+/// [Dynamic Loading]: https://www.postgresql.org/docs/current/xfunc-c.html#XFUNC-C-DYNLOAD
 #[macro_export]
 macro_rules! pg_module_magic {
     () => {
@@ -110,7 +129,7 @@ macro_rules! pg_module_magic {
             #[cfg(not(feature = "pg13"))]
             const MY_MAGIC: pgx::pg_sys::Pg_magic_struct = pgx::pg_sys::Pg_magic_struct {
                 len: size_of::<pgx::pg_sys::Pg_magic_struct>() as c_int,
-                version: pgx::pg_sys::PG_VERSION_NUM as std::os::raw::c_int / 100,
+                version: pgx::pg_sys::PG_VERSION_NUM as c_int / 100,
                 funcmaxargs: pgx::pg_sys::FUNC_MAX_ARGS as c_int,
                 indexmaxkeys: pgx::pg_sys::INDEX_MAX_KEYS as c_int,
                 namedatalen: pgx::pg_sys::NAMEDATALEN as c_int,
@@ -121,7 +140,7 @@ macro_rules! pg_module_magic {
             #[cfg(feature = "pg13")]
             const MY_MAGIC: pgx::pg_sys::Pg_magic_struct = pgx::pg_sys::Pg_magic_struct {
                 len: size_of::<pgx::pg_sys::Pg_magic_struct>() as c_int,
-                version: pgx::pg_sys::PG_VERSION_NUM as std::os::raw::c_int / 100,
+                version: pgx::pg_sys::PG_VERSION_NUM as c_int / 100,
                 funcmaxargs: pgx::pg_sys::FUNC_MAX_ARGS as c_int,
                 indexmaxkeys: pgx::pg_sys::INDEX_MAX_KEYS as c_int,
                 namedatalen: pgx::pg_sys::NAMEDATALEN as c_int,
@@ -138,7 +157,14 @@ macro_rules! pg_module_magic {
     };
 }
 
-/// Top-level initialization function.  This is called automatically by the `pg_module_magic!()`
+/// Initialize the extension with Postgres
+///
+/// Sets up panic handling with [register_pg_guard_panic_handler()][register_pg_guard_panic_handler]
+/// to ensure that a crash within the extension does not adversely affect the entire server process.
+///
+/// ## Note
+///
+/// This is called automatically by the `[pg_module_magic!()]`
 /// macro and need not be called directly
 #[allow(unused)]
 pub fn initialize() {
