@@ -18,7 +18,6 @@ extern "C" {
         lineno: i32,
         colno: i32,
     );
-
 }
 
 #[derive(Clone, Debug)]
@@ -67,24 +66,33 @@ fn take_panic_location() -> PanicLocation {
 // via pg_module_magic!() this gets set to Some(()) for the "main" thread, and remains at None
 // for all other threads.
 #[cfg(debug_assertions)]
-thread_local! { pub(crate) static IS_MAIN_THREAD: once_cell::sync::OnceCell<()> = once_cell::sync::OnceCell::new() }
+thread_local! { pub(crate) static MAIN_THREAD: once_cell::sync::OnceCell<()> = once_cell::sync::OnceCell::new() }
+
+/// Return true when called from the same thread that executed [pg_module_magic!()]
+///
+/// This function is the "public" API that is useful for checking that
+/// concurrency invariants have been satisfied, e.g. no concurrency.
+#[cfg(debug_assertions)]
+pub(crate) fn is_main_thread() -> bool {
+    MAIN_THREAD.with(|v| v.get().is_some()
+}
 
 pub fn register_pg_guard_panic_handler() {
     // first, lets ensure we're not calling ourselves twice
     #[cfg(debug_assertions)]
     {
-        if IS_MAIN_THREAD.with(|v| v.get().is_some()) {
-            panic!("IS_MAIN_THREAD has already been set")
+        if MAIN_THREAD.with(|v| v.get().is_some()) {
+            panic!("MAIN_THREAD has already been set")
         }
 
         // it's expected that this function will only ever be called by `pg_module_magic!()` by the main thread
-        IS_MAIN_THREAD.with(|v| v.set(()).expect("failed to set main thread sentinel"));
+        MAIN_THREAD.with(|v| v.set(()).expect("failed to set main thread sentinel"));
     }
 
     std::panic::set_hook(Box::new(|info| {
         #[cfg(debug_assertions)]
         {
-            if IS_MAIN_THREAD.with(|v| v.get().is_none()) {
+            if MAIN_THREAD.with(|v| v.get().is_none()) {
                 // a thread that isn't the main thread panic!()d
                 // we make a best effort to push a message to stderr, which hopefully
                 // Postgres is logging somewhere
