@@ -19,3 +19,4 @@ proc-macro2 = "1.0.26"
 quote = "1.0.9"
 syn = { version = "1.0.71", features = [ "extra-traits", "full", "fold", "parsing" ] }
 unescape = "0.1.0"
+proc-macro-crate = "1.0.0"

@@ -59,6 +59,11 @@ pub mod varlena;
 pub mod wrappers;
 pub mod xid;
 
+#[doc(hidden)]
+pub use inventory;
+#[doc(hidden)]
+pub use once_cell;
+
 pub use atomics::*;
 pub use callbacks::*;
 pub use datum::*;
@@ -89,6 +94,91 @@ pub use xid::*;
 pub use pgx_pg_sys as pg_sys; // the module only, not its contents
 pub use pgx_pg_sys::submodules::*;
 pub use pgx_pg_sys::PgBuiltInOids; // reexport this so it looks like it comes from here
+
+use core::any::TypeId;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+
+/// Top-level initialization function.  This is called automatically by the `pg_module_magic!()`
+/// macro and need not be called directly
+#[allow(unused)]
+pub fn initialize() {
+    register_pg_guard_panic_handler();
+}
+
+pub fn map_unsized_type<T: 'static + ?Sized>(map: &mut HashMap<TypeId, String>, sql: &str) {
+    let single_sql = sql.to_string();
+
+    map.insert(*<T as WithTypeIds>::ITEM_ID, single_sql.clone());
+}
+
+pub fn map_type<T: 'static>(map: &mut HashMap<TypeId, String>, sql: &str) {
+    let single_sql = sql.to_string();
+    let set_sql = format!("{}[]", single_sql);
+
+    map.insert(*<T as WithTypeIds>::ITEM_ID, single_sql.clone());
+
+    if let Some(id) = *WithSizedTypeIds::<T>::OPTION_ID {
+        map.insert(id, single_sql.clone());
+    }
+    if let Some(id) = *WithSizedTypeIds::<T>::VEC_ID {
+        map.insert(id, set_sql.clone());
+    }
+    if let Some(id) = *WithSizedTypeIds::<T>::VEC_OPTION_ID {
+        map.insert(id, set_sql.clone());
+    }
+    
+    if let Some(id) = *WithArrayTypeIds::<T>::ARRAY_ID {
+        map.insert(id, set_sql.clone());
+    }
+    if let Some(id) = *WithArrayTypeIds::<T>::OPTION_ARRAY_ID {
+        map.insert(id, set_sql.clone());
+    }
+
+    if let Some(id) = *WithArrayTypeIds::<T>::VARLENA_ID {
+        map.insert(id, set_sql.clone());
+    }
+}
+
+pub static DEFAULT_TYPEID_SQL_MAPPING: Lazy<HashMap<TypeId, String>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+
+    map_unsized_type::<str>(&mut m, "text");
+    map_type::<&str>(&mut m, "text");
+    map_type::<String>(&mut m, "text");
+    map_type::<&std::ffi::CStr>(&mut m, "cstring");
+    map_type::<()>(&mut m, "void");
+    map_type::<i8>(&mut m, "\"char\"");
+    map_type::<i16>(&mut m, "smallint");
+    map_type::<i32>(&mut m, "integer");
+    map_type::<i64>(&mut m, "bigint");
+    map_type::<bool>(&mut m, "bool");
+    map_type::<char>(&mut m, "varchar");
+    map_type::<f32>(&mut m, "real");
+    map_type::<f64>(&mut m, "double precision");
+    map_type::<datum::JsonB>(&mut m, "jsonb");
+    map_type::<datum::Json>(&mut m, "json");
+    map_type::<pgx_pg_sys::ItemPointerData>(&mut m, "tid");
+    map_type::<pgx_pg_sys::Point>(&mut m, "point");
+    map_type::<pgx_pg_sys::BOX>(&mut m, "box");
+    map_type::<Date>(&mut m, "date");
+    map_type::<Time>(&mut m, "time");
+    map_type::<Timestamp>(&mut m, "timestamp");
+    map_type::<TimeWithTimeZone>(&mut m, "time with time zone");
+    map_type::<pgx_pg_sys::PlannerInfo>(&mut m, "internal");
+    map_type::<datum::Numeric>(&mut m, "numeric");
+    map_type::<pg_sys::Oid>(&mut m, "oid");
+    map_type::<datum::AnyElement>(&mut m, "anyelement");
+    map_type::<datum::Inet>(&mut m, "inet");
+
+    // Bytea is a special case...
+    m.insert(TypeId::of::<&[u8]>(), String::from("bytea"));
+    m.insert(TypeId::of::<Option<&[u8]>>(), String::from("bytea"));
+    m.insert(TypeId::of::<Vec<u8>>(), String::from("bytea"));
+    m.insert(TypeId::of::<Option<Vec<u8>>>(), String::from("bytea"));
+
+    m
+});
 
 /// A macro for marking a library compatible with the Postgres extension framework.
 ///
@@ -135,12 +225,140 @@ macro_rules! pg_module_magic {
             // return the magic
             &MY_MAGIC
         }
+
+        pub use __pgx_internals::generate_sql;
+        mod __pgx_internals {
+            use ::core::{any::TypeId, convert::TryFrom};
+            use ::pgx::datum::{Array, FromDatum, PgVarlena};
+            use ::pgx_utils::pg_inventory::{once_cell::sync::Lazy, *};
+            use ::std::collections::HashMap;
+
+            static CONTROL_FILE: &str = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/",
+                env!("CARGO_CRATE_NAME"),
+                ".control"
+            ));
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct ExtensionSql(pub pgx_utils::pg_inventory::InventoryExtensionSql);
+            inventory::collect!(ExtensionSql);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct PostgresType(pub pgx_utils::pg_inventory::InventoryPostgresType);
+            inventory::collect!(PostgresType);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct PgExtern(pub pgx_utils::pg_inventory::InventoryPgExtern);
+            inventory::collect!(PgExtern);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct PostgresEnum(pub pgx_utils::pg_inventory::InventoryPostgresEnum);
+            inventory::collect!(PostgresEnum);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct PostgresHash(pub pgx_utils::pg_inventory::InventoryPostgresHash);
+            inventory::collect!(PostgresHash);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct PostgresOrd(pub pgx_utils::pg_inventory::InventoryPostgresOrd);
+            inventory::collect!(PostgresOrd);
+
+            #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+            pub struct Schema(pub pgx_utils::pg_inventory::InventorySchema);
+            inventory::collect!(Schema);
+
+            pub fn generate_sql<'a>() -> pgx_utils::pg_inventory::eyre::Result<PgxSql<'a>> {
+                use std::fmt::Write;
+                let mut generated = PgxSql::build(
+                    ControlFile::try_from(CONTROL_FILE)?,
+                    (*pgx::DEFAULT_TYPEID_SQL_MAPPING)
+                        .iter()
+                        .map(|(x, y)| (x.clone(), y.clone())),
+                    {
+                        let mut set = inventory::iter::<Schema>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<ExtensionSql>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<PgExtern>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<PostgresType>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<PostgresEnum>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<PostgresOrd>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                    {
+                        let mut set = inventory::iter::<PostgresHash>().collect::<Vec<_>>();
+                        set.sort();
+                        set.into_iter().map(|x| &x.0)
+                    },
+                )?;
+
+                Ok(generated)
+            }
+        }
     };
 }
 
-/// Top-level initialization function.  This is called automatically by the `pg_module_magic!()`
-/// macro and need not be called directly
-#[allow(unused)]
-pub fn initialize() {
-    register_pg_guard_panic_handler();
+#[macro_export]
+macro_rules! pg_binary_magic {
+    ($($prelude:ident)::*) => {
+        fn main() -> ::pgx_utils::pg_inventory::color_eyre::Result<()> {
+            use ::pgx_utils::pg_inventory::{
+                tracing_error::ErrorLayer,
+                tracing,
+                tracing_subscriber::{self, util::SubscriberInitExt, layer::SubscriberExt, EnvFilter},
+                color_eyre,
+                eyre,
+            };
+            use std::env;
+            use $($prelude :: )*generate_sql;
+
+            // Initialize tracing with tracing-error.
+            let fmt_layer = tracing_subscriber::fmt::layer().with_target(false);
+            let filter_layer = EnvFilter::try_from_default_env()
+                .or_else(|_| EnvFilter::try_new("info"))
+                .unwrap();
+            tracing_subscriber::registry()
+                .with(filter_layer)
+                .with(fmt_layer)
+                .with(ErrorLayer::default())
+                .init();
+
+            color_eyre::install()?;
+
+            let mut args = env::args().skip(1);
+            let path = args.next().unwrap_or(concat!("./sql/", stringify!($($prelude :: )*), ".sql").into());
+            let dot: Option<String> = args.next();
+            if args.next().is_some() {
+                return Err(eyre::eyre!("Only accepts two arguments, the destination path, and an optional (GraphViz) dot output path."));
+            }
+
+            tracing::info!(path = %path, "Writing SQL.");
+            let sql = generate_sql()?;
+            sql.to_file(path)?;
+            if let Some(dot) = dot {
+                sql.to_dot(dot)?;
+            }
+            Ok(())
+        }
+    };
 }

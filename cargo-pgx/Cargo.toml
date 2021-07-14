@@ -28,3 +28,4 @@ rttp_client = { version = "0.1.0", features = ["tls-native"] }
 syn = { version = "1.0.71", features = [ "extra-traits", "full", "fold", "parsing" ] }
 unescape = "0.1.0"
 fork = "0.1.18"
+libloading = "0.7"

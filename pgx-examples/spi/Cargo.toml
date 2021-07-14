@@ -4,7 +4,7 @@ version = "0.0.0"
 edition = "2018"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 # remove this empty 'workspace' declaration if compiling outside of 'pgx'
 [workspace]
@@ -20,6 +20,7 @@ pg_test = []
 [dependencies]
 pgx = { path = "../../../pgx/pgx/", default-features = false }
 pgx-macros = { path = "../../../pgx/pgx-macros" }
+pgx-utils = { path = "../../../pgx/pgx-utils" }
 
 [dev-dependencies]
 pgx-tests = { path = "../../../pgx/pgx-tests" }

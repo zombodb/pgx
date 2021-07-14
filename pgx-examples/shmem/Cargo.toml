@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 # remove this empty 'workspace' declaration if compiling outside of 'pgx'
 [workspace]
@@ -21,6 +21,7 @@ pg_test = []
 heapless = "0.6.1"
 pgx = { path = "../../../pgx/pgx/", default-features = false }
 pgx-macros = { path = "../../../pgx/pgx-macros" }
+pgx-utils = { path = "../../../pgx/pgx-utils" }
 serde = { version = "1.0.114", features = [ "derive" ] }
 
 [dev-dependencies]

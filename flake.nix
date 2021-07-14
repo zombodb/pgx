@@ -50,6 +50,7 @@
             rustfmt
             nixpkgs-fmt
             cargo-pgx
+            postgresql
           ];
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         });

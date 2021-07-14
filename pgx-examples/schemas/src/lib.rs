@@ -16,6 +16,7 @@ fn hello_default_schema() -> &'static str {
 
 /// we can create our own schemas, which are just Rust `mod`s.  Anything defined in this module
 /// will be created in a Postgres schema of the same name
+#[pg_schema]
 mod some_schema {
     use pgx::*;
     use serde::{Deserialize, Serialize};
@@ -32,6 +33,7 @@ mod some_schema {
 /// we can also cheat and put pgx objects in Postgres' `pg_catalog` schema,
 /// which will make them available regardless of the active `search_path`, but
 /// requires that the extension be created by a super-user
+#[pg_schema]
 mod pg_catalog {
     use pgx::*;
     use serde::{Deserialize, Serialize};
@@ -42,6 +44,7 @@ mod pg_catalog {
 
 /// similarly, we can create objects in Postgres' `public` schema.  This will at least require the
 /// proper permissions by the user calling `CREATE EXTENSION`
+#[pg_schema]
 mod public {
     use pgx::*;
 

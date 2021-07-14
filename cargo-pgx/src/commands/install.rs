@@ -2,14 +2,11 @@
 // governed by the MIT license that can be found in the LICENSE file.
 
 use crate::commands::get::{find_control_file, get_property};
-use crate::commands::schema::read_load_order;
 use colored::Colorize;
 use pgx_utils::pg_config::PgConfig;
 use pgx_utils::{exit_with_error, get_target_dir, handle_result};
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::str::FromStr;
 
 pub(crate) fn install_extension(
     pg_config: &PgConfig,
@@ -50,14 +47,13 @@ pub(crate) fn install_extension(
         copy_file(shlibpath, dest, "shared library");
     }
 
-    {
-        handle_result!(
-            crate::generate_schema(&*additional_features),
-            "failed to generate SQL schema"
-        );
-    }
-
-    copy_sql_files(&extdir, &extname, &base_directory);
+    copy_sql_files(
+        pg_config,
+        is_release,
+        additional_features,
+        &extdir,
+        &base_directory,
+    );
 
     println!("{} installing {}", "     Finished".bold().green(), extname);
     Ok(())
@@ -87,7 +83,7 @@ fn copy_file(src: PathBuf, dest: PathBuf, msg: &str) {
     );
 }
 
-fn build_extension(major_version: u16, is_release: bool, additional_features: &[&str]) {
+pub(crate) fn build_extension(major_version: u16, is_release: bool, additional_features: &[&str]) {
     let mut features =
         std::env::var("PGX_BUILD_FEATURES").unwrap_or(format!("pg{}", major_version));
     let flags = std::env::var("PGX_BUILD_FLAGS").unwrap_or_default();
@@ -128,49 +124,31 @@ fn build_extension(major_version: u16, is_release: bool, additional_features: &[
     }
 }
 
-pub(crate) fn write_full_schema_file(dir: &PathBuf, extdir: Option<&PathBuf>) {
-    let (_, extname) = find_control_file();
-    let load_order = read_load_order(&PathBuf::from_str("./sql/load-order.txt").unwrap());
-    let mut target_filename = dir.clone();
-    if extdir.is_some() {
-        target_filename.push(extdir.unwrap());
-    }
-    target_filename.push(format!("{}--{}.sql", extname, get_version()));
+fn copy_sql_files(
+    pg_config: &PgConfig,
+    is_release: bool,
+    additional_features: Vec<&str>,
+    extdir: &PathBuf,
+    base_directory: &PathBuf,
+) {
+    let mut dest = base_directory.clone();
+    dest.push(extdir);
 
-    let mut sql = std::fs::File::create(&target_filename).unwrap();
-    println!(
-        "{} extension schema to `{}`",
-        "      Writing".bold().green(),
-        format_display_path(&target_filename)
-    );
+    let (_, extname) = crate::commands::get::find_control_file();
+    let version = get_version();
+    dest.push(format!("{}--{}.sql", extname, version));
 
-    // write each sql file from load-order.txt to the version.sql file
-    for file in load_order {
-        let file = PathBuf::from_str(&format!("sql/{}", file)).unwrap();
-        let pwd = std::env::current_dir().expect("no current directory");
-        let contents = std::fs::read_to_string(&file).expect(&format!(
-            "could not open {}/{}",
-            pwd.display(),
-            file.display()
-        ));
-
-        let contents = filter_contents(contents);
-
-        sql.write_all(b"--\n")
-            .expect("couldn't write version SQL file");
-        sql.write_all(format!("-- {}\n", file.display()).as_bytes())
-            .expect("couldn't write version SQL file");
-        sql.write_all(b"--\n")
-            .expect("couldn't write version SQL file");
-        sql.write_all(contents.as_bytes())
-            .expect("couldn't write version SQL file");
-        sql.write_all(b"\n\n\n")
-            .expect("couldn't write version SQL file");
-    }
-}
-
-fn copy_sql_files(extdir: &PathBuf, extname: &str, base_directory: &PathBuf) {
-    write_full_schema_file(&base_directory, Some(extdir));
+    crate::schema::generate_schema(
+        pg_config,
+        is_release,
+        &*additional_features,
+        &dest,
+        Option::<String>::None,
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(&dest).unwrap();
+    let written = filter_contents(written);
+    std::fs::write(&dest, written).unwrap();
 
     // now copy all the version upgrade files too
     for sql in handle_result!(std::fs::read_dir("sql/"), "failed to read ./sql/ directory") {
@@ -188,7 +166,7 @@ fn copy_sql_files(extdir: &PathBuf, extname: &str, base_directory: &PathBuf) {
     }
 }
 
-fn find_library_file(extname: &str, is_release: bool) -> PathBuf {
+pub(crate) fn find_library_file(extname: &str, is_release: bool) -> PathBuf {
     let mut target_dir = get_target_dir();
     target_dir.push(if is_release { "release" } else { "debug" });
 
@@ -221,7 +199,7 @@ fn find_library_file(extname: &str, is_release: bool) -> PathBuf {
     }
 }
 
-fn get_version() -> String {
+pub(crate) fn get_version() -> String {
     match get_property("default_version") {
         Some(v) => v,
         None => exit_with_error!("cannot determine extension version number.  Is the `default_version` property declared in the control file?"),

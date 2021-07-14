@@ -34,20 +34,25 @@ impl PgGuardRewriter {
     pub fn item_fn(
         &self,
         func: ItemFn,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         rewrite_args: bool,
         is_raw: bool,
         no_guard: bool,
     ) -> (proc_macro2::TokenStream, bool) {
         if rewrite_args {
-            self.item_fn_with_rewrite(func, is_raw, no_guard)
+            self.item_fn_with_rewrite(func, inventory_submission, is_raw, no_guard)
         } else {
-            (self.item_fn_without_rewrite(func, no_guard), true)
+            (
+                self.item_fn_without_rewrite(func, inventory_submission, no_guard),
+                true,
+            )
         }
     }
 
     fn item_fn_with_rewrite(
         &self,
         mut func: ItemFn,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         is_raw: bool,
         no_guard: bool,
     ) -> (proc_macro2::TokenStream, bool) {
@@ -102,6 +107,7 @@ impl PgGuardRewriter {
                     generics,
                     func_call,
                     rewritten_return_type,
+                    inventory_submission,
                     no_guard,
                 ),
                 true,
@@ -118,6 +124,7 @@ impl PgGuardRewriter {
                     func_name_wrapper,
                     generics,
                     func_call,
+                    inventory_submission,
                     false,
                 ),
                 true,
@@ -132,6 +139,7 @@ impl PgGuardRewriter {
                     func_name_wrapper,
                     generics,
                     func_call,
+                    inventory_submission,
                     true,
                 ),
                 true,
@@ -146,6 +154,7 @@ impl PgGuardRewriter {
                     func_name_wrapper,
                     generics,
                     func_call,
+                    inventory_submission,
                     false,
                 ),
                 true,
@@ -160,6 +169,7 @@ impl PgGuardRewriter {
                     func_name_wrapper,
                     generics,
                     func_call,
+                    inventory_submission,
                     true,
                 ),
                 true,
@@ -175,6 +185,7 @@ impl PgGuardRewriter {
         generics: &Generics,
         func_call: proc_macro2::TokenStream,
         rewritten_return_type: proc_macro2::TokenStream,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         no_guard: bool,
     ) -> proc_macro2::TokenStream {
         let guard = if no_guard {
@@ -182,6 +193,7 @@ impl PgGuardRewriter {
         } else {
             quote! {#[pg_guard]}
         };
+        let inventory_submission = inventory_submission.cloned().into_iter();
         quote_spanned! {func_span=>
             #prolog
 
@@ -194,6 +206,8 @@ impl PgGuardRewriter {
 
                 #rewritten_return_type
             }
+
+            #(#inventory_submission)*
         }
     }
 
@@ -224,6 +238,7 @@ impl PgGuardRewriter {
         func_name_wrapper: Ident,
         generics: &Generics,
         func_call: proc_macro2::TokenStream,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         optional: bool,
     ) -> proc_macro2::TokenStream {
         let generic_type = proc_macro2::TokenStream::from_str(types.first().unwrap()).unwrap();
@@ -243,6 +258,8 @@ impl PgGuardRewriter {
                 let result = pgx::PgMemoryContexts::For(funcctx.multi_call_memory_ctx).switch_to(|_| { #func_call result });
             }
         };
+
+        let inventory_submission = inventory_submission.cloned().into_iter();
 
         quote_spanned! {func_span=>
             #prolog
@@ -293,6 +310,8 @@ impl PgGuardRewriter {
                     },
                 }
             }
+
+            #(#inventory_submission)*
         }
     }
 
@@ -304,6 +323,7 @@ impl PgGuardRewriter {
         func_name_wrapper: Ident,
         generics: &Generics,
         func_call: proc_macro2::TokenStream,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         optional: bool,
     ) -> proc_macro2::TokenStream {
         let numtypes = types.len();
@@ -343,6 +363,7 @@ impl PgGuardRewriter {
                 let result = pgx::PgMemoryContexts::For(funcctx.multi_call_memory_ctx).switch_to(|_| { #func_call result });
             }
         };
+        let inventory_submission = inventory_submission.cloned().into_iter();
 
         quote_spanned! {func_span=>
             #prolog
@@ -404,12 +425,15 @@ impl PgGuardRewriter {
                     },
                 }
             }
+
+            #(#inventory_submission)*
         }
     }
 
     fn item_fn_without_rewrite(
         &self,
         mut func: ItemFn,
+        inventory_submission: Option<&pgx_utils::pg_inventory::PgExtern>,
         no_guard: bool,
     ) -> proc_macro2::TokenStream {
         // remember the original visibility and signature classifications as we want
@@ -473,6 +497,8 @@ impl PgGuardRewriter {
             }
         };
 
+        let inventory_submission = inventory_submission.cloned().into_iter();
+
         quote_spanned! {func.span()=>
             #prolog
             #vis #sig {
@@ -480,6 +506,8 @@ impl PgGuardRewriter {
                 #func
                 #func_call
             }
+
+            #(#inventory_submission)*
         }
     }
 

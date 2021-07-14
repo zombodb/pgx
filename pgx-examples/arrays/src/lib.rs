@@ -109,6 +109,7 @@ pub mod pg_test {
     }
 }
 
+#[pg_schema]
 #[cfg(any(test, feature = "pg_test"))]
 pub mod tests {
     use crate::SomeStruct;

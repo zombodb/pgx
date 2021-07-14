@@ -105,21 +105,43 @@ subcommands:
                     takes_value: true
                     multiple: true
           - schema:
-              about: generate extension schema files (typically not necessary)
+              about: generate extension schema files
               args:
+                - release:
+                    short: r
+                    long: release
+                    help: compile for release mode (default is debug)
+                - pg_config:
+                    short: c
+                    long: pg_config
+                    takes_value: true
+                    help: the `pg_config` path (default is first in $PATH)
                 - features:
                     long: features
                     help: additional cargo features to activate (default is '--no-default-features')
                     takes_value: true
                     multiple: true
+                - dot:
+                    long: build-dot
+                    help: A path to output a produced GraphViz DOT file.
+                    takes_value: true
           - dump-schema:
               about: dump the full extension SQL schema file
               args:
+                - release:
+                    short: r
+                    long: release
+                    help: compile for release mode (default is debug)
                 - directory:
                     value_name: DIRECTORY
                     takes_value: true
                     required: true
                     help: Where should the extension .sql file be written?
+                - pg_config:
+                    short: c
+                    long: pg_config
+                    takes_value: true
+                    help: the `pg_config` path (default is first in $PATH)
                 - features:
                     long: features
                     help: additional cargo features to activate (default is '--no-default-features')

@@ -546,14 +546,16 @@ fn build_shim_for_version(
         std::fs::copy(
             format!("{}/Makefile", shim_src.display()),
             format!("{}/Makefile", shim_dst.display()),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     if !std::path::Path::new(&format!("{}/pgx-cshim.c", shim_dst.display())).exists() {
         std::fs::copy(
             format!("{}/pgx-cshim.c", shim_src.display()),
             format!("{}/pgx-cshim.c", shim_dst.display()),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     let rc = run_command(

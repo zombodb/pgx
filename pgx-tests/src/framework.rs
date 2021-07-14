@@ -301,9 +301,14 @@ fn modify_postgresql_conf(pgdata: PathBuf, postgresql_conf: Vec<&'static str>) {
     }
 
     postgresql_conf_file
-        .write_all(format!("unix_socket_directories = '{}'", Pgx::home().unwrap().display()).as_bytes())
+        .write_all(
+            format!(
+                "unix_socket_directories = '{}'",
+                Pgx::home().unwrap().display()
+            )
+            .as_bytes(),
+        )
         .expect("couldn't append `unix_socket_directories` setting to postgresql.conf");
-    
 }
 
 fn start_pg(loglines: LogLines) -> String {

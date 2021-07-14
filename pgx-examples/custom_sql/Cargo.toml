@@ -1,0 +1,37 @@
+[package]
+name = "custom_sql"
+version = "0.0.0"
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# remove this empty 'workspace' declaration if compiling outside of 'pgx'
+[workspace]
+
+[features]
+default = ["pg13"]
+pg10 = ["pgx/pg10", "pgx-tests/pg10" ]
+pg11 = ["pgx/pg11", "pgx-tests/pg11" ]
+pg12 = ["pgx/pg12", "pgx-tests/pg12" ]
+pg13 = ["pgx/pg13", "pgx-tests/pg13" ]
+pg_test = []
+
+[dependencies]
+pgx = { path = "../../../pgx/pgx/", default-features = false }
+pgx-macros = { path = "../../../pgx/pgx-macros" }
+pgx-utils = { path = "../../../pgx/pgx-utils" }
+serde = "1.0.115"
+
+[dev-dependencies]
+pgx-tests = { path = "../../../pgx/pgx-tests" }
+
+# uncomment these if compiling outside of 'pgx'
+#[profile.dev]
+#panic = "unwind"
+#
+#[profile.release]
+#panic = "unwind"
+#opt-level = 3
+#lto = "fat"
+#codegen-units = 1

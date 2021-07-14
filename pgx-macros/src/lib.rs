@@ -5,12 +5,12 @@ extern crate proc_macro;
 
 mod operators;
 mod rewriter;
+use operators::{impl_postgres_eq, impl_postgres_hash, impl_postgres_ord};
 
-use crate::operators::{impl_postgres_eq, impl_postgres_hash, impl_postgres_ord};
 use pgx_utils::*;
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span};
-use quote::{quote, quote_spanned};
+use quote::{quote, quote_spanned, ToTokens};
 use rewriter::*;
 use std::collections::HashSet;
 use syn::spanned::Spanned;
@@ -33,7 +33,7 @@ pub fn pg_guard(_attr: TokenStream, item: TokenStream) -> TokenStream {
         // process top-level functions
         // these functions get wrapped as public extern "C" functions with #[no_mangle] so they
         // can also be called from C code
-        Item::Fn(func) => rewriter.item_fn(func, false, false, false).0.into(),
+        Item::Fn(func) => rewriter.item_fn(func, None, false, false, false).0.into(),
         _ => {
             panic!("#[pg_guard] can only be applied to extern \"C\" blocks and top-level functions")
         }
@@ -155,6 +155,63 @@ pub fn merges(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+#[proc_macro_attribute]
+pub fn pg_schema(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let pgx_schema = parse_macro_input!(item as pg_inventory::Schema);
+    pgx_schema.to_token_stream().into()
+}
+
+/// Embed SQL directly into the generated extension script.
+///
+/// The argument must be as single raw string literal.
+///
+/// # Example
+/// ```
+/// # #[macro_use]
+/// # extern crate pgx_macros;
+/// # fn main() {
+/// extension_sql!(r#"
+/// -- sql statements
+/// "#)
+/// # }
+/// ```
+
+#[proc_macro]
+pub fn extension_sql(input: TokenStream) -> TokenStream {
+    fn wrapped(input: TokenStream) -> Result<TokenStream, syn::Error> {
+        let ext_sql: pg_inventory::ExtensionSql = syn::parse(input)?;
+        Ok(ext_sql.to_token_stream().into())
+    }
+
+    match wrapped(input) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            let msg = e.to_string();
+            TokenStream::from(quote! {
+              compile_error!(#msg);
+            })
+        }
+    }
+}
+
+#[proc_macro]
+pub fn extension_sql_file(input: TokenStream) -> TokenStream {
+    fn wrapped(input: TokenStream) -> Result<TokenStream, syn::Error> {
+        let ext_sql: pg_inventory::ExtensionSqlFile = syn::parse(input)?;
+        Ok(ext_sql.to_token_stream().into())
+    }
+
+    match wrapped(input) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            let msg = e.to_string();
+            TokenStream::from(quote! {
+              compile_error!(#msg);
+            })
+        }
+    }
+}
+
 /// Associated macro for `#[pg_extern] or `#[pg_operator]`.  Used to set the `SEARCH_PATH` option
 /// on the `CREATE FUNCTION` statement.
 #[proc_macro_attribute]
@@ -165,18 +222,26 @@ pub fn search_path(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Declare a function as `#[pg_extern]` to indicate that it can be used by Postgres as a UDF
 #[proc_macro_attribute]
 pub fn pg_extern(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let args = parse_extern_attributes(proc_macro2::TokenStream::from(attr));
-    let is_raw = args.contains(&ExternArgs::Raw);
-    let no_guard = args.contains(&ExternArgs::NoGuard);
+    let args = parse_extern_attributes(proc_macro2::TokenStream::from(attr.clone()));
+
+    let inventory_submission =
+        pg_inventory::PgExtern::new(attr.clone().into(), item.clone().into()).ok();
 
     let ast = parse_macro_input!(item as syn::Item);
     match ast {
-        Item::Fn(func) => rewrite_item_fn(func, is_raw, no_guard).into(),
+        Item::Fn(func) => rewrite_item_fn(func, args, inventory_submission.as_ref()).into(),
         _ => panic!("#[pg_extern] can only be applied to top-level functions"),
     }
 }
 
-fn rewrite_item_fn(mut func: ItemFn, is_raw: bool, no_guard: bool) -> proc_macro2::TokenStream {
+fn rewrite_item_fn(
+    mut func: ItemFn,
+    extern_args: HashSet<ExternArgs>,
+    inventory_submission: Option<&pg_inventory::PgExtern>,
+) -> proc_macro2::TokenStream {
+    let is_raw = extern_args.contains(&ExternArgs::Raw);
+    let no_guard = extern_args.contains(&ExternArgs::NoGuard);
+
     let finfo_name = syn::Ident::new(
         &format!("pg_finfo_{}_wrapper", func.sig.ident),
         Span::call_site(),
@@ -190,7 +255,8 @@ fn rewrite_item_fn(mut func: ItemFn, is_raw: bool, no_guard: bool) -> proc_macro
     // make the function 'extern "C"' because this is for the #[pg_extern[ macro
     func.sig.abi = Some(syn::parse_str("extern \"C\"").unwrap());
     let func_span = func.span();
-    let (rewritten_func, need_wrapper) = rewriter.item_fn(func, true, is_raw, no_guard);
+    let (rewritten_func, need_wrapper) =
+        rewriter.item_fn(func, inventory_submission.into(), true, is_raw, no_guard);
 
     if need_wrapper {
         quote_spanned! {func_span=>
@@ -203,7 +269,10 @@ fn rewrite_item_fn(mut func: ItemFn, is_raw: bool, no_guard: bool) -> proc_macro
             #rewritten_func
         }
     } else {
-        quote_spanned! {func_span=>#rewritten_func}
+        quote_spanned! {func_span=>
+
+            #rewritten_func
+        }
     }
 }
 
@@ -228,7 +297,7 @@ fn impl_postgres_enum(ast: DeriveInput) -> proc_macro2::TokenStream {
     let mut from_datum = proc_macro2::TokenStream::new();
     let mut into_datum = proc_macro2::TokenStream::new();
 
-    for d in enum_data.variants {
+    for d in enum_data.variants.clone() {
         let label_ident = &d.ident;
         let label_string = label_ident.to_string();
 
@@ -266,6 +335,8 @@ fn impl_postgres_enum(ast: DeriveInput) -> proc_macro2::TokenStream {
 
         }
     });
+
+    pg_inventory::PostgresEnum::new(enum_ident.clone(), enum_data.variants).to_tokens(&mut stream);
 
     stream
 }
@@ -363,6 +434,9 @@ fn impl_postgres_type(ast: DeriveInput) -> proc_macro2::TokenStream {
             }
         });
     }
+
+    pg_inventory::PostgresType::new(name.clone(), funcname_in.clone(), funcname_out.clone())
+        .to_tokens(&mut stream);
 
     stream
 }
@@ -478,42 +552,6 @@ fn parse_postgres_type_args(attributes: &[Attribute]) -> HashSet<PostgresTypeAtt
     }
 
     categorized_attributes
-}
-
-/// Embed SQL directly into the generated extension script.
-///
-/// The argument must be as single raw string literal.
-///
-/// # Example
-/// ```
-/// # #[macro_use]
-/// # extern crate pgx_macros;
-/// # fn main() {
-/// extension_sql!(r#"
-/// -- sql statements
-/// "#)
-/// # }
-/// ```
-
-#[proc_macro]
-pub fn extension_sql(input: TokenStream) -> TokenStream {
-    fn is_raw_str(input: &str) -> bool {
-        input.starts_with("r#\"") && input.ends_with("\"#")
-    }
-
-    let tokens: Vec<String> = input.into_iter().map(|t| t.to_string()).collect();
-
-    let ok = (tokens.len() >= 1 && is_raw_str(&tokens[0]))
-        && (tokens.len() == 1 || (tokens.len() >= 2 && tokens[1] == ","));
-
-    if ok {
-        // ignore input
-        TokenStream::new()
-    } else {
-        TokenStream::from(quote! {
-          compile_error!("expected a single raw string literal with sql");
-        })
-    }
 }
 
 #[proc_macro_derive(PostgresEq)]

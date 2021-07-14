@@ -16,11 +16,6 @@ pub(crate) fn create_crate_template(
     create_lib_rs(&path, name, is_bgworker)?;
     create_git_ignore(&path, name)?;
 
-    let cwd = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&path)?;
-    crate::generate_schema(&[])?;
-    std::env::set_current_dir(cwd)?;
-
     Ok(())
 }
 

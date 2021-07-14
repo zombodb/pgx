@@ -5,7 +5,7 @@ use crate::pg_config::PgConfig;
 use colored::Colorize;
 use proc_macro2::TokenStream;
 use proc_macro2::TokenTree;
-use quote::quote;
+use quote::{format_ident, quote, ToTokens, TokenStreamExt};
 use serde_json::value::Value as JsonValue;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -15,6 +15,7 @@ use syn::{GenericArgument, ItemFn, PathArguments, ReturnType, Type, TypeParamBou
 
 pub mod operator_common;
 pub mod pg_config;
+pub mod pg_inventory;
 
 pub static BASE_POSTGRES_PORT_NO: u16 = 28800;
 pub static BASE_POSTGRES_TESTING_PORT_NO: u16 = 32200;
@@ -182,7 +183,7 @@ pub fn get_named_capture(
     }
 }
 
-#[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq, Clone)]
 pub enum ExternArgs {
     Immutable,
     Strict,
@@ -196,6 +197,65 @@ pub enum ExternArgs {
     Error(String),
     Schema(String),
     Name(String),
+}
+
+impl core::fmt::Display for ExternArgs {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ExternArgs::Immutable => write!(f, "IMMUTABLE"),
+            ExternArgs::Strict => write!(f, "STRICT"),
+            ExternArgs::Stable => write!(f, "STABLE"),
+            ExternArgs::Volatile => write!(f, "VOLATILE"),
+            ExternArgs::Raw => Ok(()),
+            ExternArgs::ParallelSafe => write!(f, "PARALLEL SAFE"),
+            ExternArgs::ParallelUnsafe => write!(f, "PARALLEL UNSAFE"),
+            ExternArgs::ParallelRestricted => write!(f, "PARALLEL RESTRICTED"),
+            ExternArgs::Error(_) => Ok(()),
+            ExternArgs::NoGuard => Ok(()),
+            ExternArgs::Schema(_) => Ok(()),
+            ExternArgs::Name(_) => Ok(()),
+        }
+    }
+}
+
+impl ToTokens for ExternArgs {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            ExternArgs::Immutable => tokens.append(format_ident!("Immutable")),
+            ExternArgs::Strict => tokens.append(format_ident!("Strict")),
+            ExternArgs::Stable => tokens.append(format_ident!("Stable")),
+            ExternArgs::Volatile => tokens.append(format_ident!("Volatile")),
+            ExternArgs::Raw => tokens.append(format_ident!("Raw")),
+            ExternArgs::NoGuard => tokens.append(format_ident!("NoGuard")),
+            ExternArgs::ParallelSafe => tokens.append(format_ident!("ParallelSafe")),
+            ExternArgs::ParallelUnsafe => tokens.append(format_ident!("ParallelUnsafe")),
+            ExternArgs::ParallelRestricted => tokens.append(format_ident!("ParallelRestricted")),
+            ExternArgs::Error(_s) => {
+                tokens.append_all(
+                    quote! {
+                        Error(String::from("#_s"))
+                    }
+                    .to_token_stream(),
+                );
+            }
+            ExternArgs::Schema(_s) => {
+                tokens.append_all(
+                    quote! {
+                        Schema(String::from("#_s"))
+                    }
+                    .to_token_stream(),
+                );
+            }
+            ExternArgs::Name(_s) => {
+                tokens.append_all(
+                    quote! {
+                        Name(String::from("#_s"))
+                    }
+                    .to_token_stream(),
+                );
+            }
+        }
+    }
 }
 
 #[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]

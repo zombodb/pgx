@@ -12,7 +12,7 @@ use std::ffi::CStr;
 ///
 /// If implementing this, also implement `IntoDatum` for the reverse
 /// conversion.
-pub trait FromDatum {
+pub trait FromDatum: Sized {
     /// ## Safety
     ///
     /// This method is inherently unsafe as the `datum` argument can represent an arbitrary
